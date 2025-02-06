@@ -1,0 +1,148 @@
+#!/bin/bash
+
+# A dynamic, recursive dotfile manager with support for instancing.
+
+# TODO: Start small; just allow choosing desired instances and installing to ~/dots/
+
+# NOTE: Woohoo another recursive problem
+
+# read all available folders; if there is a folder not named global, move working directory to that folder and run the function itself.
+
+wormer () {
+	local origin_dir=$1
+	local directories=()
+	worm () {
+		local working_dir=$1
+		local dir=
+		local cont=false
+		read -a found_dirs <<< $(echo $working_dir/*/) 
+		if [[ ${#found_dirs[@]} == 1 ]]; then
+			echo "End of tail; closing stack and appending directories." >&2
+			directories+=("$(readlink -m $found_dirs)")
+		else
+			for dir in ${found_dirs[@]}; do
+				base=$(basename $dir)
+				r_dir=$(readlink -m $dir)
+				echo "Found: $r_dir" >&2
+				if [[ ! $base == "global" ]]; then
+					echo "Found instance: $base" >&2
+					read -p "Would you like to add instance $base? (y/n): " cont
+					if [[ $cont == "y" ]]; then
+						echo "worming $r_dir" >&2
+						worm $dir
+					else
+						echo "Skipping $base..." >&2
+						continue
+					fi
+				else 
+					echo "Automatically adding global..." >&2
+					directories+=("$r_dir")
+				fi
+			done
+		fi
+		return 0
+	}
+
+	worm $origin_dir
+
+	echo ${directories[@]}
+	return 0
+
+}
+
+# A function to link all contents within each instance to its respective dots. links will be forced? or ask to replace a link when it occurs
+# Gets file structure and creates directories to ~/dots when needed
+# Afterwards goes through every file in the directory and links it to its respective area in dots.
+linkdir () {
+	# Usage: link_global directory_of_global
+	local source_dir=$1
+	local destination="~/dots"
+	local relative_path=
+	local dest_file=
+
+	if [[ ! $dry_run == true ]]; then
+		mkdir -p "$destination"
+	fi	
+	if [[ ! $verbose_mode == true ]]; then
+		echo "made directory $destination"
+	fi
+
+	find "$source_dir" -type f | while read -r FILE; do
+		relative_path="${FILE#$source_dir/}"	
+		dest_file="$destination/$relative_path"
+
+		if [[ ! $dry_run == true ]]; then
+			mkdir -p "$(dirname "$dest_file")"
+		fi
+		if [[ $verbose_mode == true ]]; then
+			echo "made directory $(dirname "$dest_file")"
+		fi
+
+		if [[ ! $dry_run == true ]]; then
+			ln -sr "$(realpath "$FILE")" "$dest_file"
+		fi
+		if [[ $verbose_mode == true ]]; then
+			echo "linked $FILE -> $dest_file"
+		fi
+	done
+	echo "Symlinked created successfully from $source_dir"
+		
+
+
+}
+# parse options
+
+verbose_mode=false
+dry_run=false
+
+self_name=$(basename $0)
+origin=$(pwd)
+
+while getopts "vddv" opt; do
+	case $opt in
+		v) verbose_mode=true ; echo "verbose mode";;
+		d) dry_run=true ; echo "dry run mode";;
+		*) echo "Usage: $self_name [-v]" ;
+			exit 1 ;;
+	esac
+done
+
+echo -e "Dots installer - Dotter. \n"
+
+read -p "Proceed with dots installation? (y/n): " permissions
+
+if [ $permissions = "y" ]; then
+	echo "Continuing..."
+	directories=$(wormer $origin)
+	echo -e "\n"
+
+	if [ $verbose_mode = "true" ]; then
+		echo -e "Chosen directories: ${directories[@]} \n"
+	fi
+
+	echo "instances chosen: "
+	for dir in ${directories[@]}; do
+		echo "dotfiles${dir#"$origin"}"
+	done
+
+	read -p "Are you sure you want to continue? (y/n): " cont
+	if [ $cont = "y" ]; then
+		for dir in ${directories[@]}; do
+			linkdir $dir
+		done
+
+	else
+		echo "Exiting, doing nothing"
+		exit 0
+	fi
+
+
+	if [ $dry_run = true ]; then
+		echo "dry run was on; no changes were made"
+	fi
+
+else
+	echo "Exiting, doing nothing"
+	exit 0
+fi
+
