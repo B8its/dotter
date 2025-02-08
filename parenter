@@ -1,1 +1,420 @@
-../../bin/parenter
+#!/bin/bash
+
+# create files from templates; support hotreloading with daemon mode! parenter
+# If you are trying to understand this god-forsaken source code I suggest reading from where the main file begins, not the functions
+
+parse_batch () {
+	# Input: All args excluding parent and child_folder.
+	# child_placeholders is just a map which mapped the list of all placeholder arguments IE: PLACEHOLDER=1,2 PLACEHOLDER1=2,3,4 etc. to its respective child_name
+	# clear child_names and child_placholders
+	declare -ag child_names				# Array for child names (declared globally)
+	declare -Ag child_placeholders	# map (also known as associative array; im retarded ;_;)for place holders (declared globally)
+
+	local current_child=""
+
+	local args=("$@")
+
+	if [ $verbose_mode = true ]; then
+		echo -e "\nin parse_batch:"
+	fi
+
+	for arg in "${args[@]}"; do
+		# If "_" is encountered, change current child to the next one.
+
+		if [[ "$arg" == "_" ]]; then
+
+			if [ $verbose_mode = true ]; then
+				echo -e "encountered '_', moving to next child\n"
+			fi
+
+			current_child=""
+			continue
+		fi
+
+		if [[ "$arg" == *"="* ]]; then # Check if argument is a placeholder
+			# Check if current_child has been set; if not, throw syntax error.
+			if [[ -n "$current_child" ]]; then 
+				if [[ $verbose_mode == true ]]; then
+					echo "placeholder=list found: ${arg}"
+				fi
+				# At the map index current_child, append the placeholder to the list of placeholders.
+				child_placeholders["$current_child"]+="${arg} "
+
+			else # Throw syntax error
+				echo "Syntax error: New child_name must be set after '_'."
+				exit 1
+			fi
+
+			continue
+		fi
+
+		# If not a placeholder, or indicating a new child, must be another child_name
+		child_names+=("$arg")
+		current_child="$arg"
+		if [ $verbose_mode = true ]; then
+			echo "Current child: "$arg
+		fi
+	done
+
+	# ensure child is local for cleanliness
+	local child=
+	local placeholder=
+	if [[ $verbose_mode == true ]]; then
+		echo -e "
+		batch mode parsed; found arguments for each child"
+
+		echo -e "found child names: \n${child_names[@]}\n"
+		echo -e "found child placeholders: \n${child_placeholders[@]}\n"
+		echo -e "map indices: ${!child_placeholders[@]}"
+
+		for child in "${child_names[@]}"; do
+			placeholders="${child_placeholders[$child]}"
+			echo "$child: ${placeholders[@]}"
+		done
+	fi
+
+	return 0
+
+	# Nothing needs to be echoed; Results are 2 global variables with relevant data
+
+}
+
+parse_swap () {
+	# Args: parse_swap child_name PLACEHOLDER_1=ITEM1,ITEM2 PLACEHOLDER_2=ITEM3,ITEM4,...
+
+	# Create variables:
+	# swap_placeholders - Bash array of placeholders
+	# swap_list - Nested bash array (second one is comma-separated). Index matches respective placeholder
+	swap_placeholders=()
+	swap_lists=()
+	child_name=$1
+
+	if [ $verbose_mode = true ]; then
+		echo -e "\nin parse_swap sent as:\nparse_swap "$@
+	fi
+
+
+	# Create local vars for cleanliness outside the function
+	local placeholder=
+	local list=
+	local arg=
+
+	shift 1
+
+	# Parse each argument, separating each side of the equals sign into placeholder and list respectively
+	for arg in "$@"; do
+		if [ $verbose_mode = true ]; then
+			echo -e "processing: \n$arg \n"
+		fi
+		IFS='=' read -r placeholder list <<< "$arg"
+		if [ $verbose_mode = true ]; then
+			echo -e "found placeholder: $placeholder\nfound list: $list\n"
+		fi
+		swap_placeholders+=("$placeholder")
+		swap_lists+=("$list")
+	done
+
+	if [[ $verbose_mode == true ]]; then
+		echo -e "placeholders found for swapping: \n$swap_placeholders\n\nlists found for swapping:\n$swap_lists"
+	fi
+
+	return 0
+
+}
+
+# For swap mode, generate all possible combinations of values for each placeholder
+# in the form of a nested array (second is comma separated)
+# each index within the second layer array corresponds to index of placeholder
+generate_combinations () {
+	# No arguments, but expecting values to be already set
+	# reseting combinations
+	declare -ag combinations=()
+	# Expecting:
+	# swap_lists
+		if [ $verbose_mode = true ]; then
+			echo -e "\nin generate_combinations\nusing swap_lists:${swap_lists[@]}"
+		fi
+
+
+	# Recursive function - to find all possible variations
+	find_combinations () {
+		# Ask for current combination to be able to append to combinations once stack closes
+		local current_combination=$1
+		# Ask for current depth to know when to end the stack
+		local depth=$2
+
+		if [ $verbose_mode = true ]; then
+			echo -e "at depth:$depth\nat current_combination:$current_combination"
+		fi
+
+		# Check if there are any more lists to iterate through; if not then close stack and append to combinations
+		if [[ $depth -eq ${#swap_lists[@]} ]]; then
+			if [[ $verbose_mode == true ]]; then
+				echo "generating combination: $current_combination" >&2
+			fi
+
+			# Also swap space for comma to allow nesting
+			current_combination=$(echo $current_combination | xargs)
+			combinations+=("${current_combination// /,}")
+			return
+		fi
+
+		# Read the possible items for this iteration (and convert comma-separated into space separated for bash manipulation)
+		IFS=',' read -r -a items <<< "${swap_lists[$depth]}"
+
+		for item in ${items[@]}; do
+
+			# append item to current combination
+			# continue the stack until end condition is found
+			find_combinations "$current_combination$item " "$((depth + 1))"
+		done
+	}
+
+	# Generate possible combinations.
+	find_combinations 
+	# In the end $combinations should be updated with all valid combinations for that swap.
+	if [ $verbose_mode = true ]; then
+		echo -e "Combinations found:\n${combinations[@]}"
+	fi
+
+
+}
+
+# Function to swap all specified placeholders; uses all combinations to set.
+# expects:
+# combinations
+# swap_placeholders
+# child
+swapper () {
+
+	for list in ${combinations[@]}; do
+		IFS="," read -r -a items <<< "$list"
+
+		if [[ $verbose_mode == true ]]; then
+			echo -e "Extracted list: \n${items[@]}\nto be separated
+			"
+		fi
+		# Create temp file so original template is not modified
+		temp_file=$(mktemp)
+		cp $child $temp_file
+
+		for i in ${!items[@]}; do
+			if [ $verbose_mode = true ]; then
+				echo "swapping ${swap_placeholders[$i]} with ${items[$i]} in $child"
+			fi
+			sed -i "s/${swap_placeholders[$i]}/${items[$i]}/g" "$temp_file"
+		done
+
+		if [ $verbose_mode = true ]; then
+			echo "swapped file:"
+			cat $temp_file
+		fi
+
+		cat $temp_file >> $parent
+
+	done
+
+}
+
+# Update parent file
+# Required arguments: None BUT
+# parent and child_folders must be set
+# and respective modes must have their arguments parsed
+# (except swap batch; batched swaps will be parsed through update_parent due to its seoncary nature)
+update_parent () {
+
+	> "$parent"
+
+	local clean_name=
+
+	# Check which mode is being used and execute templating appropriately
+	for child in "$children_folder"/*; do
+		# Check if child is a file
+		#
+		if [ $verbose_mode = true ]; then
+			echo -e "\n\nChecking if $child is a file"
+		fi
+		if [ -f "$child" ]; then
+			# Need to clean name; $child includes $children_folder directory in string
+			clean_name=$(basename $child)
+
+			if [ $verbose_mode = true ]; then
+				echo -e "$child is a file;\nCleaned child name: $clean_name"
+			fi
+
+			if [ $swap_mode = true ]; then
+				if [ $batch_mode = true ]; then
+
+				# since batch mode, use batch mode arguments:
+				# child_names child_placeholders
+
+				# Check if child is a specified one
+				if [ $verbose_mode = true ]; then
+					echo -e "\nChecking if $clean_name is specified"
+				fi
+
+				if [[ " ${child_names[*]} " =~ [[:space:]]${clean_name}[[:space:]] ]]; then
+					if [ $verbose_mode = true ]; then
+						echo -e "$clean_name is specified\nAttempting to parse as swap"
+
+					fi
+
+					# Parse arguments if they were swap;
+					parse_swap $clean_name ${child_placeholders[$clean_name]}
+					# swap_placeholders			should be set by parse_swap
+					# swap_lists						should be set by parse_swap
+					if [ $verbose_mode = true ]; then
+						echo -e "parse_swap completed; generating combinations"
+					fi
+
+
+					generate_combinations
+					if [ $verbose_mode = true ]; then
+						echo -e "combinations generated!\n"
+					fi
+
+					# combinations					should be set by generate_combinations
+
+					# Function to swap appropriately using set swap variables
+					swapper
+					if [ $verbose_mode = true ]; then
+						echo -e "Finished swapper! \n"
+					fi
+
+
+				else
+					if [ $verbose_mode = true ]; then
+						echo -e "$clean_name was not specified in ${child_names[@]}\nTreating as normal file, attempting to append to $parent"
+					fi
+
+					cat $child >> $parent
+
+				fi
+
+			else
+
+				# only swap mode, so generate combinations
+				# swap_lists and swap_placeholders should already be generated
+				# check if child has been specified
+				generate_combinations
+				swapper
+				fi
+			else
+				# Not swapped, so append to the file as-is
+				cat "$child" >> "$parent"
+			fi
+		else
+			# if child is not a file then it must be a directory
+			# NOTE: Could add feature for nested templating; sounds like a pain for arguments tho
+			echo "Error: directory $child found in children_folder"
+			exit 1
+		fi
+	done
+
+	echo "$(date '+%Y-%m-%d %H:%M:%S') - $parent updated with contents from $children_folder."
+}
+
+# Check if inotify-tools is installed
+if ! command -v inotifywait &>/dev/null; then
+	echo "Error: inotifywait is not installed. Install it using your package manager or build from source"
+	exit 1
+fi
+
+# Parse arguments
+daemon_mode=false
+swap_mode=false
+verbose_mode=false
+batch_mode=false
+
+#Check which modes should be set to true
+while getopts "sdbvsbsv" opt; do
+	case $opt in
+		s) swap_mode=true ;;
+		d) daemon_mode=true ;;
+		v) verbose_mode=true ;;
+		b) batch_mode=true ;;
+		*) echo "Usage: $(basename $0) [-s] [-d] [-b] parent_file child_folder [child_name PLACEHOLDER1=LIST1 PLACEHOLDER2=LIST2 ... _ child_name1 PLACEHOLDER1=L...]";
+			exit 1 ;;
+	esac
+done
+shift $((OPTIND - 1))
+
+if [[ $verbose_mode == true ]]; then
+	echo "verbose_mode is active"
+	if [ $daemon_mode = true ]; then
+		echo "daemon_mode is active"
+	fi
+fi
+
+# Check if required arguments are provided
+if [ "$swap_mode" = true ]; then
+	if [ $verbose_mode = true ]; then
+		echo "Swap mode active"
+	fi
+	if [ "$#" -lt 4 ]; then
+		echo "Usage: $(basename $0) -s [-d] [-b] parent_file child_folder child_name1 PLACEHOLDER1=LIST1 PLACEHOLDER2=LIST2 ... [ _ child_name2 PLACEHOLDERX=L...]"
+		exit 1
+	fi
+
+	parent="$1"
+	children_folder="$2"
+
+	shift 2 # Get the rest of the arguments
+
+	if [ "$batch_mode" = true ]; then
+		if [ $verbose_mode = true ]; then
+			echo "Batch mode active"
+		fi
+
+		# Store the command arguments in an array
+		# Parse batch to generate child_names and child_placeholders array
+		# child_names
+		# child_placeholders
+		parse_batch $@
+
+		# Print the extracted child names
+		echo "Extracted child names: ${child_names[@]}"
+
+		# Print the extracted placeholders for each child
+		if [ $verbose_mode = true ]; then
+			for child in "${child_names[@]}"; do
+				# Remove trailing comma if present
+				placeholders="${child_placeholders[$child]}"
+				echo "Placeholders for $child: ${placeholders[@]}"
+			done
+		fi
+
+	else
+		# Parse arguments for swap only
+		# Preparing arguments for updating parent
+		# Create Variables:
+		# child_name
+		# swap_placeholders
+		# swap_lists
+
+		parse_swap $@
+	fi
+
+else # No option was chosen, prepare arguments for parent with no placeholders
+	if [ "$#" -ne 2 ]; then
+		echo "Usage: $(basename $0) [-s] [-d] [-b] parent_file child_folder [child_name PLACEHOLDER1=LIST1 PLACEHOLDER2=LIST2 ... _ child_name1 PLACEHOLDER1=L...]"
+		exit 1
+	fi
+
+	parent="$1"
+	children_folder="$2"
+fi
+
+# run initial update to parent
+update_parent
+
+# If daemon mode is enabled, monitor the folder for changes
+if [ "$daemon_mode" = true ]; then
+	echo "Running in daemon mode. Monitoring $children_folder for changes..."
+	inotifywait -m -e close_write,create,delete,move "$children_folder" | while read -r directory event filename; do
+	echo "Change detected: $event on $filename. Updating parent..."
+	update_parent
+done
+fi
+
+# Haha 420
