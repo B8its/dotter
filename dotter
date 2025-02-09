@@ -3,10 +3,15 @@
 # A dynamic, recursive dotfile manager with support for instancing.
 
 # TODO: Start small; just allow choosing desired instances and installing to ~/dots/
+# TODO: Think about .dotters
 
 # NOTE: Woohoo another recursive problem
+# 
+# Set all global vars:
+dotconf="/home/$(whoami)/dots/.dotter.conf"
 
 # read all available folders; if there is a folder not named global, move working directory to that folder and run the function itself.
+
 
 wormer () {
 	local origin_dir=$1
@@ -68,28 +73,276 @@ linkdir () {
 	fi
 
 	find "$source_dir" -type f | while read -r FILE; do
-		relative_path="${FILE#$source_dir/}"	
-		dest_file="$destination/$relative_path"
+	relative_path="${FILE#$source_dir/}"	
+	dest_file="$destination/$relative_path"
 
-		if [[ ! $dry_run == true ]]; then
-			mkdir -p "$(dirname "$dest_file")"
-		fi
-		if [[ $verbose_mode == true ]]; then
-			echo "made directory $(dirname "$dest_file")"
-		fi
+	if [[ ! $dry_run == true ]]; then
+		mkdir -p "$(dirname "$dest_file")"
+	fi
+	if [[ $verbose_mode == true ]]; then
+		echo "made directory $(dirname "$dest_file")"
+	fi
 
-		if [[ ! $dry_run == true ]]; then
-			ln -sr "$(realpath "$FILE")" "$dest_file"
-		fi
-		if [[ $verbose_mode == true ]]; then
-			echo "linked $FILE -> $dest_file"
-		fi
-	done
-	echo "Symlinked created successfully from $source_dir"
-		
-
-
+	if [[ ! $dry_run == true ]]; then
+		ln -sr "$(realpath "$FILE")" "$dest_file"
+	fi
+	if [[ $verbose_mode == true ]]; then
+		echo "linked $FILE -> $dest_file"
+	fi
+done
+echo "Symlinked created successfully from $source_dir"
 }
+
+dotter_set() {
+    if [[ $1 == "monitors" ]]; then
+        if ! command -v wlr-randr &>/dev/null; then
+            echo "Error: wlr-randr is not installed. Please install it via your package manager." >&2
+            exit 1
+        fi
+
+        echo "No options were passed, setting all defaults (Monitors)"
+        echo ""
+
+        mapfile -t monitors < <(wlr-randr --json | jq -r '.[].name')
+        local monitor_indexes=(${!monitors[@]})
+
+        echo "Available monitors:"
+        for i in "${!monitors[@]}"; do
+            echo "$i) ${monitors[$i]}"
+
+        done
+
+
+        while true; do
+					read -p "Select the main monitor index (0-$((${#monitors[@]}-1))): " main_monitor_index
+            if [[ "$main_monitor_index" =~ ^[0-9]+$ ]] && (( main_monitor_index >= 0 && main_monitor_index < ${#monitors[@]} )); then
+                local main_monitor_id=${monitors[$main_monitor_index]}
+                local tempjson=$(mktemp)
+                
+                echo "Setting .monitors.main's id and index..."
+                jq --arg id "$main_monitor_id" --argjson index "$main_monitor_index" \
+                    '.monitors.main.id = $id | .monitors.main.index = $index' "$dotconf" > "$tempjson" && mv "$tempjson" "$dotconf"
+                
+                echo "Setting .monitors.extra's ids and indexes..."
+                monitor_extra_ids=($(printf '%s\n' "${monitors[@]}" | grep -v "^$main_monitor_id$"))
+                monitor_extra_indexes=($(printf '%s\n' "${monitor_indexes[@]}" | grep -v "^$main_monitor_index$"))
+                
+                jq --argjson ids "$(printf '%s\n' "${monitor_extra_ids[@]}" | jq -R . | jq -s .)" \
+                    '.monitors.extra.ids = $ids' "$dotconf" > "$tempjson" && mv "$tempjson" "$dotconf"
+                
+                jq --argjson indexes "$(printf '%s\n' "${monitor_extra_indexes[@]}" | jq -R 'tonumber' | jq -s .)" \
+                    '.monitors.extra.indexes = $indexes' "$dotconf" > "$tempjson" && mv "$tempjson" "$dotconf"
+                
+                return 0
+            else
+                echo "Invalid input. Please enter a valid index." >&2
+            fi
+        done
+    
+    elif [[ $1 == "info" ]]; then
+        shift 1
+        
+        if [[ $# -eq 2 ]]; then
+            local var_name="$1"
+            local var_value="$2"
+            local tempjson=$(mktemp)
+            
+            jq --arg name "$var_name" --arg value "$var_value" \
+                '.info[$name] = $value' "$dotconf" > "$tempjson" && mv "$tempjson" "$dotconf"
+            echo "Updated .info.$var_name = $var_value"
+            return 0
+        
+        elif [[ $# -eq 3 ]]; then
+            local location="$1"
+            local var_name="$2"
+            local var_value="$3"
+            local tempjson=$(mktemp)
+            
+            jq --arg loc "$location" --arg name "$var_name" --arg value "$var_value" \
+                '.info[$loc][$name] = $value' "$dotconf" > "$tempjson" && mv "$tempjson" "$dotconf"
+            echo "Updated .info.$location.$var_name = $var_value"
+            return 0
+        
+        else
+            echo -e "Error: Invalid arguments.\nUsage:\n  dotter_set info (Variable_name) (Value)\n  OR\n  dotter_set info (Location) (Variable_name) (Value)" >&2
+            exit 1
+        fi
+    
+    else
+        echo "Error: Invalid command. Available options: monitors, info" >&2
+        exit 1
+    fi
+}
+# Command for option: get
+dotter_get () {
+	# Expecting rest of arguments, $@
+	# All information should be set in .dotter.conf in /home/user/dots/
+
+
+	if [[ $1 == "monitors" ]]; then
+		shift 1
+		main_monitor=$(jq -r '.monitors.main.id // "null"' "$dotconf")
+		extra_monitors=$(jq -r '.monitors.extra.ids // "null"' "$dotconf")
+
+		if [[ "$main_monitor" == "null" || "$extra_monitors" == "null" ]]; then
+			echo "Monitor values are not set up. Please run \`dotter set monitors\`."
+			exit 1
+		fi 
+		if [[ $1 == "main" ]]; then
+			shift 1
+			if [[ $1 == "id" ]]; then
+
+				jq .monitors.main.id $dotconf 
+
+			elif [[ $1 == "index" ]];then
+				
+				jq .monitors.main.index $dotconf 
+
+			elif [[ -z $1 ]]; then
+
+				jq .monitors.main $dotconf 
+
+			else # If wrong option
+				echo -e "error: invalid input\noptions: \n	index\n	id\n	none(outputs all)"
+				exit 1
+			fi
+		elif [[ $1 == "extra" ]]; then
+			shift 1
+			if [[ $1 == "ids" ]]; then
+				# Because top level, output as bash array
+				
+				jq -r '.monitors.extra.ids[]' $dotconf
+
+			elif [[ $1 == "indexes" ]]; then
+				
+				jq -r '.monitors.extra.indexes[]' $dotconf
+
+			elif [[ -z $1 ]]; then
+				
+				jq .monitors.extra $dotconf
+				
+			else
+				echo -e "error: invalid option\noptions:\n	ids\n	indexes"
+				exit 1
+			fi
+
+		elif [ -z $1 ]; then
+
+			jq .monitors $dotconf
+
+		else
+			# TODO: Write invalid option for here
+			exit 1
+		fi
+
+	elif [[ $1 == "info" ]]; then
+
+		shift 1
+		local name=$1
+		local name_output=$(jq ".info.$name" $dotconf)
+
+		# Check if jq found "name"
+		if [[ ! $name_output == "null" ]]; then
+			# jq found variables for "name"
+
+			# Check if var exists
+			if [[ -n $2 ]]; then
+
+				local var_output=$(jq ".info.$name.$2" $dotconf)
+
+				if [[ ! $var_output == "null" ]]; then
+					echo $var_output
+
+				else
+					echo -e "error: Possible spelling mistake; value '.info.$name.$2' doesn't exist"
+					exit 1
+				fi
+
+			elif [[ -z $2 ]]; then
+
+				echo $name_output
+
+			else
+				echo -e "error: Possible spelling mistake; value '.info.$var' doesn't exist"
+				exit 1
+			fi
+		else
+			# JQ didn't find any value, so throw error
+
+			echo -e "info for '$1' doesn't exist.\nCheck for spelling errors."
+			exit 1
+		fi
+
+	elif [[ -z $1 ]]; then
+
+		jq . $dotconf
+
+	else
+		echo "
+Invalid option: $1
+options: 
+	monitors - get information on monitors
+	info - get information on a variable set for certain .dotter
+"
+		exit 1
+	fi
+	return 0
+	
+}
+dotter_request() {
+    if [[ $# -lt 2 ]]; then
+        echo "Error: Invalid number of arguments."
+        echo "Usage: dotter_request (monitors/info) (name) (variable) [--string='custom prompt']"
+        echo "       OR"
+        echo "       dotter_request (monitors/info) (variable) [--string='custom prompt']"
+        exit 1
+    fi
+
+    local type=$1
+    local name=$2
+    local variable=$3
+		shift 3
+    local custom_prompt=$*
+    # Parse --string option
+    for arg in "$@"; do
+        if [[ "$arg" =~ ^--string= ]]; then
+            custom_prompt="${arg#--string=}"
+            break
+        fi
+    done
+
+    if [[ $type == "monitors" ]]; then
+        # Check if monitors are already set
+        local monitors_set=$(jq -e '.monitors' "$dotconf" 2>/dev/null)
+        if [[ $? -ne 0 || "$monitors_set" == "null" ]]; then
+            echo "Monitors are not set up. Running 'dotter_set monitors'..."
+            dotter_set monitors
+        else
+            # If monitors are set, just get the requested value
+            dotter_get monitors "$name" "$variable"
+        fi
+
+    elif [[ $type == "info" ]]; then
+        # Check if the requested info exists
+        local info_value=$(jq -e ".info.$name.$variable" "$dotconf" 2>/dev/null)
+        if [[ $? -ne 0 || "$info_value" == "null" ]]; then
+            # If the info doesn't exist, prompt the user to set it
+            if [[ -z "$custom_prompt" ]]; then
+                custom_prompt="Enter value for .info.$name.$variable: "
+            fi
+            read -p "$custom_prompt" value
+            dotter_set info "$name" "$variable" "$value"
+        else
+            # If the info exists, just get the value
+            dotter_get info "$name" "$variable"
+        fi
+
+    else
+        echo "Error: Invalid type. Available options: monitors, info"
+        exit 1
+    fi
+}
+
 # parse options
 
 verbose_mode=false
@@ -107,42 +360,72 @@ while getopts "vddv" opt; do
 	esac
 done
 
-echo -e "Dots installer - Dotter. \n"
+# check if option has been set; if not continue
+if [ -n "$1" ]; then
+	if [ $1 = "get" ]; then
+		shift 1
+		# Run command for get option
+		dotter_get "$@"
+	# elif [ $1 = ]... Haven't decided on other options
+	elif [ $1 = "set" ]; then # Check for set option
+		shift 1
+		dotter_set "$@" # function for set option
+	elif [ $1 = "request" ]; then
+		shift 1
+		dotter_request "$@"
+	else
 
-read -p "Proceed with dots installation? (y/n): " permissions
+		echo "
+Invalid option: $1
+Options:
+	get - get value of certain objects
+	set - set value of certain objects 
+	update - update specified dynamic dotfiles
+	daemon - like update but supports hot-reloading
+		"
+		exit 1
 
-if [ $permissions = "y" ]; then
-	echo "Continuing..."
-	directories=$(wormer $origin)
-	echo -e "\n"
-
-	if [ $verbose_mode = "true" ]; then
-		echo -e "Chosen directories: ${directories[@]} \n"
 	fi
+	# No option was specified - running installer
+else
+	echo -e "Dots installer - Dotter.
+	assuming installation because no options passed.
+	run 'dotter --help' to see options\n"
 
-	echo "instances chosen: "
-	for dir in ${directories[@]}; do
-		echo "dotfiles${dir#"$origin"}"
-	done
+	read -p "Proceed with dots installation? (y/n): " permissions
 
-	read -p "Are you sure you want to continue? (y/n): " cont
-	if [ $cont = "y" ]; then
+	if [ $permissions = "y" ]; then
+		echo "Continuing..."
+		directories=$(wormer $origin)
+		echo -e "\n"
+
+		if [ $verbose_mode = "true" ]; then
+			echo -e "Chosen directories: ${directories[@]} \n"
+		fi
+
+		echo "instances chosen: "
 		for dir in ${directories[@]}; do
-			linkdir $dir
+			echo "dotfiles${dir#"$origin"}"
 		done
+
+		read -p "Are you sure you want to continue? (y/n): " cont
+		if [ $cont = "y" ]; then
+			for dir in ${directories[@]}; do
+				linkdir $dir
+			done
+
+		else
+			echo "Exiting, doing nothing"
+			exit 0
+		fi
+
+
+		if [ $dry_run = true ]; then
+			echo "dry run was on; no changes were made"
+		fi
 
 	else
 		echo "Exiting, doing nothing"
 		exit 0
 	fi
-
-
-	if [ $dry_run = true ]; then
-		echo "dry run was on; no changes were made"
-	fi
-
-else
-	echo "Exiting, doing nothing"
-	exit 0
 fi
-

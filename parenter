@@ -333,7 +333,7 @@ while getopts "sdbvsbsv" opt; do
 		d) daemon_mode=true ;;
 		v) verbose_mode=true ;;
 		b) batch_mode=true ;;
-		*) echo "Usage: $(basename $0) [-s] [-d] [-b] parent_file child_folder [child_name PLACEHOLDER1=LIST1 PLACEHOLDER2=LIST2 ... _ child_name1 PLACEHOLDER1=L...]";
+		*) echo "Usage: $(basename $0) [-s] [-d] [-b] [-v] parent_file child_folder [child_name PLACEHOLDER1=LIST1 PLACEHOLDER2=LIST2 ... _ child_name1 PLACEHOLDER1=L...]";
 			exit 1 ;;
 	esac
 done
@@ -352,7 +352,7 @@ if [ "$swap_mode" = true ]; then
 		echo "Swap mode active"
 	fi
 	if [ "$#" -lt 4 ]; then
-		echo "Usage: $(basename $0) -s [-d] [-b] parent_file child_folder child_name1 PLACEHOLDER1=LIST1 PLACEHOLDER2=LIST2 ... [ _ child_name2 PLACEHOLDERX=L...]"
+		echo "Usage: $(basename $0) -s [-d] [-b] [-v] parent_file child_folder child_name1 PLACEHOLDER1=LIST1 PLACEHOLDER2=LIST2 ... [ _ child_name2 PLACEHOLDERX=L...]"
 		exit 1
 	fi
 
@@ -372,8 +372,6 @@ if [ "$swap_mode" = true ]; then
 		# child_placeholders
 		parse_batch $@
 
-		# Print the extracted child names
-		echo "Extracted child names: ${child_names[@]}"
 
 		# Print the extracted placeholders for each child
 		if [ $verbose_mode = true ]; then
@@ -397,7 +395,7 @@ if [ "$swap_mode" = true ]; then
 
 else # No option was chosen, prepare arguments for parent with no placeholders
 	if [ "$#" -ne 2 ]; then
-		echo "Usage: $(basename $0) [-s] [-d] [-b] parent_file child_folder [child_name PLACEHOLDER1=LIST1 PLACEHOLDER2=LIST2 ... _ child_name1 PLACEHOLDER1=L...]"
+		echo "Usage: $(basename $0) [-s] [-d] [-b] [-v] parent_file child_folder [child_name PLACEHOLDER1=LIST1 PLACEHOLDER2=LIST2 ... _ child_name1 PLACEHOLDER1=L...]"
 		exit 1
 	fi
 
