@@ -54,6 +54,29 @@ wormer () {
 	return 0
 
 }
+dot_add () {
+	# Arguments: dot_add full_destination full_file_location
+	local full_destination=$1
+	local full_file_location=$2
+	
+
+	echo -e "\n\n\n\nfound .dot \n\n\n\n"
+	local tempjson=$(mktemp)
+	local loc="$(dirname "$full_destination")"
+	local loc="${loc#~/dots/}"  # Remove the leading ~/dots/
+	# Use jq to update .dotter.conf
+	
+	if [ $verbose_mode = "true" ]; then
+		echo "Full destination = $full_destination"
+		echo "Full file location = $full_file_location"
+		echo "location = $loc"
+	fi
+
+
+	jq --argjson dot "$(jq '.' $full_file_location)" --arg loc "$loc" \
+		'.dots[$loc] = $dot' $dotconf > tempjson && mv tempjson $dotconf 
+	rm $tempjson
+}
 
 # A function to link all contents within each instance to its respective dots. links will be forced? or ask to replace a link when it occurs
 # Gets file structure and creates directories to ~/dots when needed
@@ -61,7 +84,7 @@ wormer () {
 linkdir () {
 	# Usage: link_global directory_of_global
 	local source_dir=$1
-	local destination="~/dots"
+	local destination=~/dots
 	local relative_path=
 	local dest_file=
 
@@ -73,26 +96,124 @@ linkdir () {
 	fi
 
 	find "$source_dir" -type f | while read -r FILE; do
-	relative_path="${FILE#$source_dir/}"	
-	dest_file="$destination/$relative_path"
+		relative_path="${FILE#$source_dir/}"	
+		dest_file="$destination/$relative_path"
 
-	if [[ ! $dry_run == true ]]; then
-		mkdir -p "$(dirname "$dest_file")"
-	fi
-	if [[ $verbose_mode == true ]]; then
-		echo "made directory $(dirname "$dest_file")"
-	fi
+		if [[ ! $dry_run == true ]]; then
+			mkdir -p "$(dirname $dest_file)"
+		fi
+		if [[ $verbose_mode == true ]]; then
+			echo "made directory $(dirname $dest_file)"
+		fi
+		if [[ "$(basename $FILE)" == ".dot" ]]; then
+			dot_add "$dest_file" "$FILE"
+		fi
 
-	if [[ ! $dry_run == true ]]; then
-		ln -sr "$(realpath "$FILE")" "$dest_file"
-	fi
-	if [[ $verbose_mode == true ]]; then
-		echo "linked $FILE -> $dest_file"
-	fi
-done
+		if [[ ! $dry_run == true ]]; then
+			ln -sr "$(realpath "$FILE")" "$dest_file"
+		fi
+		if [[ $verbose_mode == true ]]; then
+			echo "linked $FILE -> $dest_file"
+		fi
+	done
 echo "Symlinked created successfully from $source_dir"
 }
+dotter_do_requests () {
+	# Check if .dotter.conf exists and contains "{}"
+	if [ ! -f "$dotconf" ]; then
+		if [ ! -s "$dotconf" ]; then
+			echo "'$dotconf' was empty"
+			echo "{}" > $dotconf
+		else
+			echo "'$dotconf' didn't exist"
+			echo "{}" > $dotconf
+		fi
+		
+	else
+		continue
+	fi
+	local dots=
+	declare -A requested_vars
+	local tempjson=$(mktemp)
+	echo "what" >&2
+	jq -r '.dots | to_entries[] | .key' "$dotconf" | while read -r dot_key; do
+		echo "Processing dot key: $dot_key"
+		# Loop through each key-value pair in the "request" object for the current dot key
+		jq -r --arg dot_key "$dot_key" '.dots[$dot_key].request | to_entries[] | "\(.key): \(.value)"' "$dotconf" | while read -r request_entry; do
+			variable_name="${request_entry%%:*}"
+			variable_args="${request_entry#*: }"
+			variable_args=$(sed "s|%DOT_KEY%|$dot_key|g" <<< "$variable_args")
+			# Don't want escaped?
+			# For some reason it believes that there are speech marks around it, when there shouldn't be.
+			# NOTE: Temporary solution is to remove all quotes for now. Not good but works for now.
+			# TODO: Fix during rewrite
+			dotter_request $variable_args </dev/tty 
+			variable_value=$(dotter_request $variable_args)
+			variable_value=${variable_value//\"/}
+			if [ $verbose_mode = "true" ]; then
+				echo "variable_name = $variable_name"
+				echo "variable_args = $variable_args"
+				echo "dotter_request $variable_args"
+				echo "Variable_value = $variable_value"
+				echo -e "\n"
+			fi
+			# check if value already existed
+			if [[ -z $(jq --arg dot_key "$dot_key" --arg name "$variable_name" '.info[$dot_key][$name] //empty' $dotconf) ]]; then
+				jq --arg name "$variable_name" --arg value $variable_value --arg dot_key "$dot_key" '.info[$dot_key] += {$name: $value}' "$dotconf" > "$tempjson" && mv $tempjson $dotconf 
+			fi
+		done
+	done
+}
 
+dotter_install () {
+	echo -e "Dots installer - Dotter.
+	assuming installation because no options passed.
+	run 'dotter --help' to see options\n"
+
+	read -p "Proceed with dots installation? (y/n): " permissions
+
+	if [ $permissions = "y" ]; then
+		echo "Continuing..."
+		directories=$(wormer $origin)
+		echo -e "\n"
+
+		if [ $verbose_mode = "true" ]; then
+			echo -e "Chosen directories: ${directories[@]} \n"
+		fi
+
+		echo "instances chosen: "
+		for dir in ${directories[@]}; do
+			echo "dotfiles${dir#"$origin"}"
+		done
+
+		read -p "Are you sure you want to continue? (y/n): " cont
+		if [ $cont = "y" ]; then
+			for dir in ${directories[@]}; do
+				linkdir $dir
+			done
+			read -p "Would you like prepare the .dotter.conf file? (y/n): " prepare
+			if [ $prepare = "y" ]; then
+				dotter_do_requests
+			else
+				echo "If you would like to create the .dotter.conf, run 'dotter do requests'"
+				echo "Exiting without creating .dotter.conf"
+				exit 0
+			fi
+		else
+			echo "Exiting, doing nothing"
+			exit 0
+		fi
+
+		if [ $dry_run = true ]; then
+			echo "dry run was on; no changes were made"
+		fi
+
+	else
+		echo "Exiting, doing nothing"
+		exit 0
+	fi
+
+}
 dotter_set() {
     if [[ $1 == "monitors" ]]; then
         if ! command -v wlr-randr &>/dev/null; then
@@ -135,8 +256,10 @@ dotter_set() {
                 
                 return 0
             else
-                echo "Invalid input. Please enter a valid index." >&2
+                echo "\"$main_monitor_index\" is an invalid input. Please enter a valid index." >&2
             fi
+						# Stop spamming wrong inputs
+						sleep 1
         done
     
     elif [[ $1 == "info" ]]; then
@@ -239,7 +362,10 @@ dotter_get () {
 
 		shift 1
 		local name=$1
-		local name_output=$(jq ".info.$name" $dotconf)
+
+		# Fix for names with dots in them. Set the variable with the . in them to a variable for jq, and then use jq's version to continue the command
+		
+		local name_output=$(jq --arg n "$name" '.info[$n]' $dotconf)
 
 		# Check if jq found "name"
 		if [[ ! $name_output == "null" ]]; then
@@ -248,7 +374,7 @@ dotter_get () {
 			# Check if var exists
 			if [[ -n $2 ]]; then
 
-				local var_output=$(jq ".info.$name.$2" $dotconf)
+				local var_output=$(jq --arg n "$name" --arg two "$2" '.info[$n].[$two]' $dotconf)
 
 				if [[ ! $var_output == "null" ]]; then
 					echo $var_output
@@ -289,33 +415,38 @@ options:
 	return 0
 	
 }
+
 dotter_request() {
     if [[ $# -lt 2 ]]; then
         echo "Error: Invalid number of arguments."
-        echo "Usage: dotter_request (monitors/info) (name) (variable) [--string='custom prompt']"
+				echo "Usage: dotter_request (-q) (monitors/info) (name) (variable) [--string='custom prompt']"
         echo "       OR"
-        echo "       dotter_request (monitors/info) (variable) [--string='custom prompt']"
+				echo "       dotter_request (-q) (monitors/info) (variable) [--string='custom prompt']"
         exit 1
     fi
+		local quiet_mode
+
+		while getopts "q" opt; do
+			case $opt in
+				q) quiet_mode=true;;
+			esac
+		done
+
 
     local type=$1
     local name=$2
     local variable=$3
 		shift 3
-    local custom_prompt=$*
+    local custom_prompt="$*"
     # Parse --string option
-    for arg in "$@"; do
-        if [[ "$arg" =~ ^--string= ]]; then
-            custom_prompt="${arg#--string=}"
-            break
-        fi
-    done
+		custom_prompt=${custom_prompt#--string=*}
+		# Remove single quotes
+		custom_prompt=${custom_prompt//\'/}
 
     if [[ $type == "monitors" ]]; then
         # Check if monitors are already set
         local monitors_set=$(jq -e '.monitors' "$dotconf" 2>/dev/null)
         if [[ $? -ne 0 || "$monitors_set" == "null" ]]; then
-            echo "Monitors are not set up. Running 'dotter_set monitors'..."
             dotter_set monitors
         else
             # If monitors are set, just get the requested value
@@ -324,7 +455,7 @@ dotter_request() {
 
     elif [[ $type == "info" ]]; then
         # Check if the requested info exists
-        local info_value=$(jq -e ".info.$name.$variable" "$dotconf" 2>/dev/null)
+			local info_value=$(jq -e ".info.\"$name\".\"$variable\"" "$dotconf" 2>/dev/null)
         if [[ $? -ne 0 || "$info_value" == "null" ]]; then
             # If the info doesn't exist, prompt the user to set it
             if [[ -z "$custom_prompt" ]]; then
@@ -359,6 +490,7 @@ while getopts "vddv" opt; do
 			exit 1 ;;
 	esac
 done
+shift $((OPTIND - 1))
 
 # check if option has been set; if not continue
 if [ -n "$1" ]; then
@@ -373,6 +505,11 @@ if [ -n "$1" ]; then
 	elif [ $1 = "request" ]; then
 		shift 1
 		dotter_request "$@"
+	elif [ $1 = "do" ]; then
+		if [ $2 = "requests" ]; then
+			shift 2
+			dotter_do_requests "$@"
+		fi
 	else
 
 		echo "
@@ -388,44 +525,5 @@ Options:
 	fi
 	# No option was specified - running installer
 else
-	echo -e "Dots installer - Dotter.
-	assuming installation because no options passed.
-	run 'dotter --help' to see options\n"
-
-	read -p "Proceed with dots installation? (y/n): " permissions
-
-	if [ $permissions = "y" ]; then
-		echo "Continuing..."
-		directories=$(wormer $origin)
-		echo -e "\n"
-
-		if [ $verbose_mode = "true" ]; then
-			echo -e "Chosen directories: ${directories[@]} \n"
-		fi
-
-		echo "instances chosen: "
-		for dir in ${directories[@]}; do
-			echo "dotfiles${dir#"$origin"}"
-		done
-
-		read -p "Are you sure you want to continue? (y/n): " cont
-		if [ $cont = "y" ]; then
-			for dir in ${directories[@]}; do
-				linkdir $dir
-			done
-
-		else
-			echo "Exiting, doing nothing"
-			exit 0
-		fi
-
-
-		if [ $dry_run = true ]; then
-			echo "dry run was on; no changes were made"
-		fi
-
-	else
-		echo "Exiting, doing nothing"
-		exit 0
-	fi
+dotter_install 
 fi
