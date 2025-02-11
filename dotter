@@ -27,7 +27,7 @@ wormer () {
 		else
 			for dir in ${found_dirs[@]}; do
 				base=$(basename $dir)
-				r_dir=$(readlink -m $dir)
+			r_dir=$(readlink -m $dir)
 				echo "Found: $r_dir" >&2
 				if [[ ! $base == "global" ]]; then
 					echo "Found instance: $base" >&2
@@ -55,6 +55,16 @@ wormer () {
 
 }
 dot_add () {
+	# Check if .dotter.conf exists and contains "{}"
+	if [ -f "$dotconf" ]; then
+		if [ ! -s "$dotconf" ]; then
+			echo "'$dotconf' was empty" >&2
+			echo "{}" > "$dotconf"
+		fi
+	else
+		echo "'$dotconf' didn't exist" >&2
+		echo "{}" > "$dotconf"
+	fi
 	# Arguments: dot_add full_destination full_file_location
 	local full_destination=$1
 	local full_file_location=$2
@@ -73,9 +83,167 @@ dot_add () {
 	fi
 
 
-	jq --argjson dot "$(jq '.' $full_file_location)" --arg loc "$loc" \
-		'.dots[$loc] = $dot' $dotconf > tempjson && mv tempjson $dotconf 
+	jq --argjson dot "$(jq '.' $full_file_location)" --arg loc "$loc" --arg origin "$full_file_location" \
+		'.dots[$loc] = $dot | .dots[$loc].origin = $origin' "$dotconf" > $tempjson && mv $tempjson $dotconf 
 	rm $tempjson
+}
+
+# dots template - add a defualt file for expanding upon when templating with empty json things.
+# Args: (location) Otherwise uses pwd
+dots_template () {
+	local template="
+{
+	\"request\": {
+	},
+	\"parenter\": [
+	],
+	\"cmds\": [
+	]
+}
+"
+	# clean up the template
+	template=$(jq . <<< $template)
+	# Check if args is empty
+	local location
+	if [[ -z "$1" ]]; then
+		location=$PWD
+	else
+		location="$1"
+	fi
+	echo "$location"
+	# if .dot already exists ask if they want to override it
+	local cont
+	if [[ -f $location/.dot ]]; then
+		read -p "$location/.dot already exists. Override? (y/n): " cont
+		if [ ! $cont = "y" ]; then
+			echo "Exitting..."
+			exit 0
+		fi
+	fi
+	echo "$template" > $location/.dot
+
+	
+}
+
+# Do all parent commands from dotter.conf
+dotter_do_parents () {
+	# get each field in .info and loop through it
+	jq -r '.info | to_entries[] | .key' "$dotconf" | while read -r dot_key; do
+	# Create associative array with all values
+		declare -A variables=()
+
+		# Read each info and add to associative array
+		# Use process substitution to avoid subshell issues
+		while read -r info_entry; do
+			variable_name="${info_entry%%:*}"
+			variable_value="${info_entry#*: }"
+			variables["$variable_name"]="${variable_value}"
+			if [ "$verbose_mode" = true ]; then
+				echo -e "variable_name = $variable_name\nvariable_value = $variable_value"
+			fi
+			# TODO: learn how tf process substitution works (as told from ai)
+		done < <(jq -r --arg dot_key "$dot_key" '.info[$dot_key] | to_entries[] | "\(.key): \(.value)"' "$dotconf")
+
+		# Using these values, execute all parenter entries
+		parenter_entries=()
+		while read -r parenter_entry; do
+			# parse all variables within each parenter entry and replace with respective value from associative array
+			if [ "$verbose_mode" = true ]; then
+				echo "Parenter entry = $parenter_entry"
+			fi
+			for key in ${!variables[@]}; do
+				if [ "$verbose_mode" = true ]; then
+					echo "Attempting to swap \$$key for ${variables[$key]}"
+				fi
+				parenter_entry=$(sed "s/\$$key/${variables[$key]}/g" <<< $parenter_entry)
+				if [ "$verbose_mode" = true ]; then
+					echo -e "Result:\n$parenter_entry\n\n"
+				fi
+			done
+			if [ "$verbose_mode" = true ]; then
+				echo -e "Parsed parenter entry = $parenter_entry\n\n"
+			fi
+			# Parenter entry has been parsed; can now do parenter command BUT must move to correct directory first
+			# Move to correct directory
+			local correct_dir=~/dots/$dot_key
+			if [ "$verbose_mode" = true ]; then
+				echo "correct dir = $correct_dir"
+			fi
+			(cd $correct_dir &&
+				if [ "$verbose_mode" = true ]; then
+					pwd
+					echo "parenter $parenter_entry"
+				fi
+				parenter $parenter_entry
+			)
+		done < <(jq -r --arg dot_key "$dot_key" '.dots[$dot_key].parenter[]' $dotconf)
+		# Now `variables` contains the expected values
+		if [ "$verbose_mode" = true ]; then
+			echo "from $dot_key: ${variables[@]}"
+		fi
+	done
+}
+
+# Do all cmd cmds from dotter.conf
+dotter_do_cmds () {
+	# Go through all the possible dots in dots, read through cmds and execute them from said directory.
+	jq -r '.dots | to_entries[] | .key' "$dotconf" | while read -r dot_key; do
+		correct_dir=~/dots/$dot_key
+		jq -r --arg dot_key "$dot_key" '.dots[$dot_key].cmds[]' $dotconf | while read -r cmd; do
+			(cd $correct_dir && $cmd)
+		done
+		
+	done
+	
+}
+
+# dots update - reload dot configuration without reinstalling.
+dots_update () {
+	# Args: Specified dots, given the same way as in dots in the config.
+	# IE: dotter dots update user/.config/eww
+	local args=("$@")
+	
+	# Check if args is empty:
+	if [[ -z "$args" ]]; then
+		# Assume all dots need to updated.
+		if [ $verbose_mode = "true" ]; then
+			echo "No options passed. Updating all registered dots."
+		fi
+		jq -r '.dots | to_entries[] | .key' "$dotconf" | while read -r dot_key; 
+		do
+			local origin="$(jq --arg dot_key "$dot_key" '.dots[$dot_key].origin' "$dotconf")"
+			# strip origin of quotes
+			origin="${origin//\"/}"
+			# Also need to get full_destination dot_add
+			local destination=~/dots/$dot_key/.dot
+
+			if [ $verbose_mode = "true" ];then
+				echo "dot_key = $dot_key" 
+				echo "origin = $origin" 
+				echo "destination = $destination"
+				echo "using dot_add with the follwing args:"
+				echo "dot_add \"$destination\" \"$origin\" "
+			fi
+			dot_add "$destination" "$origin"
+		done
+	else
+		for arg in "${args[@]}"; do
+			local origin="$(jq --arg arg "$arg" '.dots[$arg].origin' "$dotconf")"
+			# strip origin of quotes
+			origin="${origin//\"/}"
+			local destination=~/dots/$arg/.dot
+			if [ $verbose_mode = "true" ]; then
+				echo "origin = $origin" 
+				echo "destination = $destination"
+				echo "using dot_add with the follwing args:"
+				echo "dot_add \"$destination\" \"$origin\" "
+			fi
+		dot_add "$destination" "$origin"
+		done
+	fi
+
+	
+	return 0
 }
 
 # A function to link all contents within each instance to its respective dots. links will be forced? or ask to replace a link when it occurs
@@ -119,25 +287,16 @@ linkdir () {
 echo "Symlinked created successfully from $source_dir"
 }
 dotter_do_requests () {
-	# Check if .dotter.conf exists and contains "{}"
-	if [ ! -f "$dotconf" ]; then
-		if [ ! -s "$dotconf" ]; then
-			echo "'$dotconf' was empty"
-			echo "{}" > $dotconf
-		else
-			echo "'$dotconf' didn't exist"
-			echo "{}" > $dotconf
-		fi
-		
-	else
-		continue
-	fi
 	local dots=
-	declare -A requested_vars
 	local tempjson=$(mktemp)
-	echo "what" >&2
+
+	if [ $verbose_mode = "true" ]; then
+		echo "$(jq . "$dotconf")"
+	fi
+
 	jq -r '.dots | to_entries[] | .key' "$dotconf" | while read -r dot_key; do
 		echo "Processing dot key: $dot_key"
+		echo "Dot_key from first while read: $dot_key"
 		# Loop through each key-value pair in the "request" object for the current dot key
 		jq -r --arg dot_key "$dot_key" '.dots[$dot_key].request | to_entries[] | "\(.key): \(.value)"' "$dotconf" | while read -r request_entry; do
 			variable_name="${request_entry%%:*}"
@@ -151,6 +310,7 @@ dotter_do_requests () {
 			variable_value=$(dotter_request $variable_args)
 			variable_value=${variable_value//\"/}
 			if [ $verbose_mode = "true" ]; then
+				echo "dot_key = $dot_key"
 				echo "variable_name = $variable_name"
 				echo "variable_args = $variable_args"
 				echo "dotter_request $variable_args"
@@ -159,6 +319,9 @@ dotter_do_requests () {
 			fi
 			# check if value already existed
 			if [[ -z $(jq --arg dot_key "$dot_key" --arg name "$variable_name" '.info[$dot_key][$name] //empty' $dotconf) ]]; then
+				if [ $verbose_mode = true ]; then
+					echo "passed value existing test"
+				fi
 				jq --arg name "$variable_name" --arg value $variable_value --arg dot_key "$dot_key" '.info[$dot_key] += {$name: $value}' "$dotconf" > "$tempjson" && mv $tempjson $dotconf 
 			fi
 		done
@@ -185,6 +348,23 @@ dotter_install () {
 		for dir in ${directories[@]}; do
 			echo "dotfiles${dir#"$origin"}"
 		done
+
+		# Add chosen instances to json
+		# Check if .dotter.conf exists and contains "{}"
+		if [ -f "$dotconf" ]; then
+			if [ ! -s "$dotconf" ]; then
+				echo "'$dotconf' was empty" >&2
+				echo "{}" > "$dotconf"
+			fi
+		else
+			echo "'$dotconf' didn't exist" >&2
+			echo "{}" > "$dotconf"
+		fi
+		local tempjson=$(mktemp)
+		local json="$(printf '%s\n' ${directories[@]} | jq -R . | jq -s .)"
+		echo "json = ${json[@]}"
+		jq --argjson instances "$json" '.instances = $instances' $dotconf > $tempjson && mv $tempjson $dotconf	
+			
 
 		read -p "Are you sure you want to continue? (y/n): " cont
 		if [ $cont = "y" ]; then
@@ -239,21 +419,32 @@ dotter_set() {
             if [[ "$main_monitor_index" =~ ^[0-9]+$ ]] && (( main_monitor_index >= 0 && main_monitor_index < ${#monitors[@]} )); then
                 local main_monitor_id=${monitors[$main_monitor_index]}
                 local tempjson=$(mktemp)
+								
+								if [ $verbose_mode = "true" ]; then
+									echo "ids = ${monitors[*]}"
+									echo "indexes = ${!monitors[*]}"
+								fi
+
+								echo "Setting .monitors.all ids and indexes..."
+                jq --arg ids "${monitors[*]}" --arg indexes "${!monitors[*]}" \
+                    '.monitors.all.ids = $ids | .monitors.all.indexes = $indexes' "$dotconf" > "$tempjson" && mv "$tempjson" "$dotconf"
                 
                 echo "Setting .monitors.main's id and index..."
-                jq --arg id "$main_monitor_id" --argjson index "$main_monitor_index" \
+                jq --arg id "$main_monitor_id" --arg index "$main_monitor_index" \
                     '.monitors.main.id = $id | .monitors.main.index = $index' "$dotconf" > "$tempjson" && mv "$tempjson" "$dotconf"
                 
                 echo "Setting .monitors.extra's ids and indexes..."
-                monitor_extra_ids=($(printf '%s\n' "${monitors[@]}" | grep -v "^$main_monitor_id$"))
-                monitor_extra_indexes=($(printf '%s\n' "${monitor_indexes[@]}" | grep -v "^$main_monitor_index$"))
+
+								monitor_extras=("${monitors[@]}")
+								unset 'monitor_extras[$main_monitor_index]'
+								if [ $verbose_mode = "true" ]; then
+									echo "ids = ${monitor_extras[*]}"
+									echo "indexes = ${!monitor_extras[*]}"
+								fi	
                 
-                jq --argjson ids "$(printf '%s\n' "${monitor_extra_ids[@]}" | jq -R . | jq -s .)" \
-                    '.monitors.extra.ids = $ids' "$dotconf" > "$tempjson" && mv "$tempjson" "$dotconf"
-                
-                jq --argjson indexes "$(printf '%s\n' "${monitor_extra_indexes[@]}" | jq -R 'tonumber' | jq -s .)" \
-                    '.monitors.extra.indexes = $indexes' "$dotconf" > "$tempjson" && mv "$tempjson" "$dotconf"
-                
+								jq --arg ids "${monitor_extras[*]}" --arg indexes "${!monitor_extras[*]}" \
+									'.monitors.extra.ids = $ids | .monitors.extra.indexes = $indexes' $dotconf > $tempjson && mv $tempjson $dotconf
+
                 return 0
             else
                 echo "\"$main_monitor_index\" is an invalid input. Please enter a valid index." >&2
@@ -334,11 +525,11 @@ dotter_get () {
 			if [[ $1 == "ids" ]]; then
 				# Because top level, output as bash array
 				
-				jq -r '.monitors.extra.ids[]' $dotconf
+				jq -r '.monitors.extra.ids' $dotconf
 
 			elif [[ $1 == "indexes" ]]; then
 				
-				jq -r '.monitors.extra.indexes[]' $dotconf
+				jq -r '.monitors.extra.indexes' $dotconf
 
 			elif [[ -z $1 ]]; then
 				
@@ -348,7 +539,17 @@ dotter_get () {
 				echo -e "error: invalid option\noptions:\n	ids\n	indexes"
 				exit 1
 			fi
-
+		elif [ $1 = "all" ]; then
+			shift 1
+			if [ $1 = "ids" ]; then
+				jq -r '.monitors.all.ids' $dotconf
+			elif [ $1 = "indexes" ]; then
+				jq -r '.monitors.all.indexes' $dotconf
+			elif [ -z $1 ]; then	
+				jq -r '.monitors.all' $dotconf
+			else
+				echo -e "'$1' is an invalid input. Valid inputs:\n	ids\n	indexes"
+			fi
 		elif [ -z $1 ]; then
 
 			jq .monitors $dotconf
@@ -509,6 +710,20 @@ if [ -n "$1" ]; then
 		if [ $2 = "requests" ]; then
 			shift 2
 			dotter_do_requests "$@"
+		elif [ $2 = "parents" ]; then
+			shift 2
+			dotter_do_parents $@
+		elif [ $2 = "cmds" ]; then
+			shift 2
+			dotter_do_cmds $@
+		fi
+	elif [ $1 = "dots" ]; then
+		if [ $2 = "update" ]; then
+			shift 2
+			dots_update $@
+		elif [ $2 = "template" ]; then
+			shift 2
+			dots_template $@
 		fi
 	else
 
