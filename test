@@ -1,3 +1,65 @@
-#!/bin/bash
+verbose mode
 
-echo "$1"
+
+
+
+
+ /home/aids/dots/.dotter.conf 
+
+
+
+
+variable_name = monitors_main_index
+variable_value = 1
+variable_name = monitors_extra_indexes
+variable_value = 0
+variable_name = widget_type
+variable_value = laptop
+Parenter entry = -sb run.sh run_templates extra-window %MONITOR%=$monitors_extra_indexes
+Attempting to swap $monitors_extra_indexes for 0
+Result:
+-sb run.sh run_templates extra-window %MONITOR%=0
+
+
+Attempting to swap $monitors_main_index for 1
+Result:
+-sb run.sh run_templates extra-window %MONITOR%=0
+
+
+Attempting to swap $widget_type for laptop
+Result:
+-sb run.sh run_templates extra-window %MONITOR%=0
+
+
+Parsed parenter entry = -sb run.sh run_templates extra-window %MONITOR%=0
+
+
+correct dir = /home/aids/dots/user/.config/eww
+/home/aids/dots/user/.config/eww
+parenter -sb run.sh run_templates extra-window %MONITOR%=0
+2025-02-12 14:51:40 - run.sh updated with contents from run_templates.
+Parenter entry = -sb eww.yuck templates main-window.yuck %MAIN_MONITOR%=$monitors_main_index %WIDGET_TYPE%=$widget_type _ extra-window.yuck %MONITOR%=$monitors_extra_indexes
+Attempting to swap $monitors_extra_indexes for 0
+Result:
+-sb eww.yuck templates main-window.yuck %MAIN_MONITOR%=$monitors_main_index %WIDGET_TYPE%=$widget_type _ extra-window.yuck %MONITOR%=0
+
+
+Attempting to swap $monitors_main_index for 1
+Result:
+-sb eww.yuck templates main-window.yuck %MAIN_MONITOR%=1 %WIDGET_TYPE%=$widget_type _ extra-window.yuck %MONITOR%=0
+
+
+Attempting to swap $widget_type for laptop
+Result:
+-sb eww.yuck templates main-window.yuck %MAIN_MONITOR%=1 %WIDGET_TYPE%=laptop _ extra-window.yuck %MONITOR%=0
+
+
+Parsed parenter entry = -sb eww.yuck templates main-window.yuck %MAIN_MONITOR%=1 %WIDGET_TYPE%=laptop _ extra-window.yuck %MONITOR%=0
+
+
+correct dir = /home/aids/dots/user/.config/eww
+/home/aids/dots/user/.config/eww
+parenter -sb eww.yuck templates main-window.yuck %MAIN_MONITOR%=1 %WIDGET_TYPE%=laptop _ extra-window.yuck %MONITOR%=0
+2025-02-12 14:51:40 - eww.yuck updated with contents from templates.
+from user/.config/eww: 0 1 laptop
+Finished

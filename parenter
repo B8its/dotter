@@ -351,10 +351,10 @@ if [ "$swap_mode" = true ]; then
 	if [ $verbose_mode = true ]; then
 		echo "Swap mode active"
 	fi
-	if [ "$#" -lt 4 ]; then
-		echo "Usage: $(basename $0) -s [-d] [-b] [-v] parent_file child_folder child_name1 PLACEHOLDER1=LIST1 PLACEHOLDER2=LIST2 ... [ _ child_name2 PLACEHOLDERX=L...]"
-		exit 1
-	fi
+#	if [ "$#" -lt 4 ]; then
+#		echo "1Usage: $(basename $0) -s [-d] [-b] [-v] parent_file child_folder child_name1 PLACEHOLDER1=LIST1 PLACEHOLDER2=LIST2 ... [ _ child_name2 PLACEHOLDERX=L...]"
+#		exit 1
+#	fi
 
 	parent="$1"
 	children_folder="$2"

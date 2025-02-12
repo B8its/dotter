@@ -148,19 +148,20 @@ dotter_do_parents () {
 	kill_parents
 	jq -r '.info | to_entries[] | .key' "$dotconf" | while read -r dot_key; do
 	# Create associative array with all values
-		declare -A variables=()
+	declare -A variables=()
 
-		# Read each info and add to associative array
-		# Use process substitution to avoid subshell issues
-		while read -r info_entry; do
-			variable_name="${info_entry%%:*}"
-			variable_value="${info_entry#*: }"
-			variables["$variable_name"]="${variable_value}"
-			if [ "$verbose_mode" = true ]; then
-				echo -e "variable_name = $variable_name\nvariable_value = $variable_value"
-			fi
-			# TODO: learn how tf process substitution works (as told from ai)
-		done < <(jq -r --arg dot_key "$dot_key" '.info[$dot_key] | to_entries[] | "\(.key): \(.value)"' "$dotconf")
+	echo -e "\n\n\n\n $dot_key \n\n\n\n"
+	# Read each info and add to associative array
+	# Use process substitution to avoid subshell issues
+	while read -r info_entry; do
+		variable_name="${info_entry%%:*}"
+		variable_value="${info_entry#*: }"
+		variables["$variable_name"]="${variable_value}"
+		if [ "$verbose_mode" = true ]; then
+			echo -e "variable_name = $variable_name\nvariable_value = $variable_value"
+		fi
+		# TODO: learn how tf process substitution works (as told from ai)
+	done < <(jq -r --arg dot_key "$dot_key" '.info[$dot_key] | to_entries[] | "\(.key): \(.value)"' "$dotconf")
 
 		# Using these values, execute all parenter entries
 		parenter_entries=()
@@ -218,10 +219,7 @@ dotter_do_parents () {
 				fi
 			)
 		done < <(jq -r --arg dot_key "$dot_key" '.dots[$dot_key].parenter[]' $dotconf)
-		# Now `variables` contains the expected values
-		if [ "$verbose_mode" = true ]; then
-			echo "from $dot_key: ${variables[@]}"
-		fi
+		echo -e "\n\nFinished loop $dot_key\n\n"
 	done
 	echo "Finished"
 }
@@ -364,7 +362,7 @@ dotter_do_requests () {
 				if [ $verbose_mode = true ]; then
 					echo "passed value existing test"
 				fi
-				jq --arg name "$variable_name" --arg value $variable_value --arg dot_key "$dot_key" '.info[$dot_key] += {$name: $value}' "$dotconf" > "$tempjson" && mv $tempjson $dotconf 
+				jq --arg name "$variable_name" --arg value "$variable_value" --arg dot_key "$dot_key" '.info[$dot_key] += {$name: $value}' "$dotconf" > "$tempjson" && mv $tempjson $dotconf 
 			fi
 		done
 	done
@@ -445,6 +443,11 @@ dotter_install () {
 	fi
 
 }
+
+dotter_config_reset () {
+	> $dotconf
+}
+
 dotter_set() {
     if [[ $1 == "monitors" ]]; then
         if ! command -v wlr-randr &>/dev/null; then
@@ -475,6 +478,9 @@ dotter_set() {
 									echo "ids = ${monitors[*]}"
 									echo "indexes = ${!monitors[*]}"
 								fi
+								# Remember that for parenter vars have to be comma separated.
+								# So changing monitors to comma separated
+								IFS=","
 
 								echo "Setting .monitors.all ids and indexes..."
                 jq --arg ids "${monitors[*]}" --arg indexes "${!monitors[*]}" \
@@ -495,10 +501,12 @@ dotter_set() {
                 
 								jq --arg ids "${monitor_extras[*]}" --arg indexes "${!monitor_extras[*]}" \
 									'.monitors.extra.ids = $ids | .monitors.extra.indexes = $indexes' $dotconf > $tempjson && mv $tempjson $dotconf
+								unset IFS
 
                 return 0
             else
                 echo "\"$main_monitor_index\" is an invalid input. Please enter a valid index." >&2
+
             fi
 						# Stop spamming wrong inputs
 						sleep 1
@@ -828,6 +836,12 @@ if [ -n "$1" ]; then
 			shift 2
 			dotter_do_cmds $@
 		fi
+
+	elif [ $1 = "config" ]; then
+		if [ $2 = "reset" ]; then
+			dotter_config_reset
+		fi
+
 	elif [ $1 = "dots" ]; then
 		if [ $2 = "update" ]; then
 			shift 2
