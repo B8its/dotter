@@ -296,6 +296,10 @@ linkdir () {
 	local relative_path=
 	local dest_file=
 
+	if [ "$verbose_mode" = true ]; then
+		echo "Source_dir = $source_dir"
+	fi
+
 	if [[ ! $dry_run == true ]]; then
 		mkdir -p "$destination"
 	fi	
@@ -366,6 +370,27 @@ dotter_do_requests () {
 			fi
 		done
 	done
+}
+# Reload entire configuration using stored instances in .dotter.conf
+dotter_reload () {
+
+	# Save all instances in separate
+	# Delete everything in .dotter.conf
+	local tempjson="$(mktemp)"
+	jq '{instances: .instances}' "$dotconf" > "$tempjson" && mv "$tempjson" "$dotconf"
+	
+	# Relink everything stated in instances, similar to how dotter_install does it
+	# Loop through instances:
+	jq -r '.instances[]' $dotconf | while read -r instance; do
+		if [ "$verbose_mode" = true ]; then
+			echo "$instance"
+		fi
+		linkdir "$instance" 
+	done
+	dotter_do_requests
+	dotter_do_parents
+	exit 0
+	
 }
 
 dotter_install () {
@@ -822,6 +847,9 @@ if [ -n "$1" ]; then
 	elif [ $1 = "set" ]; then # Check for set option
 		shift 1
 		dotter_set "$@" # function for set option
+	elif [ $1 = "reload" ]; then
+		shift 1
+		dotter_reload $@
 	elif [ $1 = "request" ]; then
 		shift 1
 		dotter_request "$@"
