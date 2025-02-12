@@ -196,7 +196,7 @@ swapper () {
 		fi
 		# Create temp file so original template is not modified
 		temp_file=$(mktemp)
-		cp $child $temp_file
+		cp "$child" "$temp_file"
 
 		for i in ${!items[@]}; do
 			if [ $verbose_mode = true ]; then
@@ -207,10 +207,10 @@ swapper () {
 
 		if [ $verbose_mode = true ]; then
 			echo "swapped file:"
-			cat $temp_file
+			cat "$temp_file"
 		fi
 
-		cat $temp_file >> $parent
+		cat "$temp_file" >> "$tempparent"
 
 	done
 
@@ -224,6 +224,7 @@ swapper () {
 update_parent () {
 
 	> "$parent"
+	tempparent="$(mktemp)"
 
 	local clean_name=
 
@@ -287,7 +288,7 @@ update_parent () {
 						echo -e "$clean_name was not specified in ${child_names[@]}\nTreating as normal file, attempting to append to $parent"
 					fi
 
-					cat $child >> $parent
+					cat $child >> "$tempparent"
 
 				fi
 
@@ -301,7 +302,7 @@ update_parent () {
 				fi
 			else
 				# Not swapped, so append to the file as-is
-				cat "$child" >> "$parent"
+				cat "$child" >> "$tempparent"
 			fi
 		else
 			# if child is not a file then it must be a directory
@@ -310,6 +311,8 @@ update_parent () {
 			exit 1
 		fi
 	done
+
+	cat "$tempparent" > "$parent"
 
 	echo "$(date '+%Y-%m-%d %H:%M:%S') - $parent updated with contents from $children_folder."
 }
