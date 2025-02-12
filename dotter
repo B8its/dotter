@@ -318,7 +318,7 @@ linkdir () {
 		fi
 
 		if [[ ! $dry_run == true ]]; then
-			ln "$(realpath "$FILE")" "$dest_file"
+			ln -f "$(realpath "$FILE")" "$dest_file"
 		fi
 		if [[ $verbose_mode == true ]]; then
 			echo "linked $FILE -> $dest_file"
