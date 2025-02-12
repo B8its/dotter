@@ -156,6 +156,10 @@ dotter_do_parents () {
 	while read -r info_entry; do
 		variable_name="${info_entry%%:*}"
 		variable_value="${info_entry#*: }"
+		# Add catch; since if variable_name has no value then "${info_entry#*: }" will fail, so check if variable_value = info_entry
+		if [ "$variable_value" = "$info_entry" ]; then
+			variable_value=""
+		fi
 		variables["$variable_name"]="${variable_value}"
 		if [ "$verbose_mode" = true ]; then
 			echo -e "variable_name = $variable_name\nvariable_value = $variable_value"
