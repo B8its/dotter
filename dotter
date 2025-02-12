@@ -2,8 +2,8 @@
 
 # A dynamic, recursive dotfile manager with support for instancing.
 
-# TODO: Start small; just allow choosing desired instances and installing to ~/dots/
-# TODO: Think about .dotters
+# DONE: Start small; just allow choosing desired instances and installing to ~/dots/
+# DONE: Think about .dotters
 
 # NOTE: Woohoo another recursive problem
 # 
@@ -125,9 +125,27 @@ dots_template () {
 	
 }
 
+kill_parents () {
+	local parents_gpid=($(ps x -o  "%r %c" | grep parenter -m 1))
+	kill -- -"$parents_gpid"
+}
+
 # Do all parent commands from dotter.conf
 dotter_do_parents () {
 	# get each field in .info and loop through it
+	# Add option --daemon=true
+	# Check if daemon option is true
+	local daemon_mode=false
+	echo "$@"
+	for arg in "$@"; do
+		echo "$arg"
+		case "$arg" in
+			"--daemon="*)
+				daemon_mode="${arg#*=}"; echo "daemon_mode = $daemon_mode";;
+		esac
+	done
+	# Kill all instances of parenter, if daemon mode is true to ensure that only a single instance remains
+	kill_parents
 	jq -r '.info | to_entries[] | .key' "$dotconf" | while read -r dot_key; do
 	# Create associative array with all values
 		declare -A variables=()
@@ -174,7 +192,30 @@ dotter_do_parents () {
 					pwd
 					echo "parenter $parenter_entry"
 				fi
-				parenter $parenter_entry
+				if [ $daemon_mode = "true" ]; then
+					# Also put all outputs to a log file under the same name
+					# Log the execution start
+					# For the log file name try and get the first option without a dash and then parse it as log_name
+					local log_name=""
+					mkdir -p ~/dots/logs
+
+					for arg in ${parenter_entry[@]}; do
+						if [[ ! $arg =~ ^- ]]; then
+							log_name=~/dots/logs/"$arg".log
+							break
+						fi
+					done
+					# Check if log_name is empty, if so just put a default name
+					if [ -z $log_name ]; then
+						log_name=~/dots/logs/"$(basename $dot_key)".log
+					fi
+
+					echo -e "\n\n$(date), entry=$parenter_entry" >> "$log_name"
+					# Run parenter in the background and redirect output
+					nohup parenter -d $parenter_entry >> "$log_name" 2>&1 &
+				else
+					parenter $parenter_entry
+				fi
 			)
 		done < <(jq -r --arg dot_key "$dot_key" '.dots[$dot_key].parenter[]' $dotconf)
 		# Now `variables` contains the expected values
@@ -182,6 +223,7 @@ dotter_do_parents () {
 			echo "from $dot_key: ${variables[@]}"
 		fi
 	done
+	echo "Finished"
 }
 
 # Do all cmd cmds from dotter.conf
@@ -278,7 +320,7 @@ linkdir () {
 		fi
 
 		if [[ ! $dry_run == true ]]; then
-			ln -sr "$(realpath "$FILE")" "$dest_file"
+			ln "$(realpath "$FILE")" "$dest_file"
 		fi
 		if [[ $verbose_mode == true ]]; then
 			echo "linked $FILE -> $dest_file"
@@ -350,6 +392,9 @@ dotter_install () {
 		done
 
 		# Add chosen instances to json
+		# Ensure dots folder exits by making it
+		mkdir -p ~/dots
+		
 		# Check if .dotter.conf exists and contains "{}"
 		if [ -f "$dotconf" ]; then
 			if [ ! -s "$dotconf" ]; then
@@ -374,6 +419,12 @@ dotter_install () {
 			read -p "Would you like prepare the .dotter.conf file? (y/n): " prepare
 			if [ $prepare = "y" ]; then
 				dotter_do_requests
+				read -p "Would you like to template all files as requested from .dot's? (y/n): " template
+				if [ $template = "y" ]; then
+					dotter_do_parents
+					
+				fi
+				echo -e "If you would like to turn on the daemon for hot reloading templates, run 'dotter do parents --daemon=true'"
 			else
 				echo "If you would like to create the .dotter.conf, run 'dotter do requests'"
 				echo "Exiting without creating .dotter.conf"
@@ -487,6 +538,66 @@ dotter_set() {
         exit 1
     fi
 }
+
+# dotter_setup; links all /dots/dirs to respective location
+dotter_setup () {
+	# Check if /dots/ has correct info.
+	user_name="$(whoami)"
+	home_folder=~
+	local dots_dir="$(dirname $dotconf)"
+	if [ "$verbose_mode" = true ]; then
+		echo "dots_dir = $dots_dir"
+	fi
+	shopt -s dotglob
+	for dir in $dots_dir/*; do
+		if [ "$verbose_mode" = true ]; then
+			echo $dir
+		fi
+		# Make sure that dir isn't logs
+		if [ "$(basename $dir)" = "logs" ]; then
+			if [ "$verbose_mode" = true ]; then
+				echo "skipping logs..."
+			fi
+			continue
+			# also make sure it isn't .dotconf
+		elif [ "$(basename $dir)" = ".dotter.conf" ]; then
+			if [ "$verbose_mode" = true ]; then
+				echo "skipping .dotter.conf..."
+			fi
+			continue
+		elif [ "$(basename $dir)" = "user" ]; then
+			# Link all user files
+			for userdir in $dir/*; do
+				echo $userdir
+				local cleandir="$(basename $userdir)"
+				if [[ ! $dry_run == "true" ]]; then
+					echo "dry notrunning"
+					ln -sr $userdir $home_folder
+				fi
+				if [ "$verbose_mode" = true ]; then
+					echo "linking $userdir -> $home_folder/$cleandir"
+				fi
+			done
+		# Just ignore anything that is not specified. Don't want to clutter the home folder.
+# 		else
+# 			local cleandir="$(basename $dir)"
+# 			if [[ ! $dry_run == "true" ]]; then
+# 				echo "dry notrunning"
+# 				ln -sr $dir $home_folder
+# 			fi
+# 			if [ "$verbose_mode" = true ]; then
+# 				echo "linking $dir -> $home_folder/$cleandir"
+# 			fi
+# 
+# 
+		fi
+	done
+	echo -e "For everything that is not the main config, such as bins and other settings, please link it manually"
+	shopt -p dotglob
+
+	
+}
+
 # Command for option: get
 dotter_get () {
 	# Expecting rest of arguments, $@
@@ -725,6 +836,20 @@ if [ -n "$1" ]; then
 			shift 2
 			dots_template $@
 		fi
+	elif [ $1 = "kill" ]; then
+		if [ $2 = "parents" ]; then
+			if pgrep parenter >/dev/null 2>&1; then
+				echo "Killing all parenter processes"
+				kill_parents
+				exit 0
+			else
+				echo "There are no parents with daemon attached"
+				exit 0
+			fi
+		fi
+	elif [ $1 = "setup" ]; then
+		shift 1
+		dotter_setup $@
 	else
 
 		echo "
