@@ -1,275 +1,62 @@
 #!/bin/bash
 
-# Dotter: 
-# instanced configuration and "package management" * Curently unimplemented.
+# A dynamic, recursive dotfile manager with support for instancing.
 
-#	TODO: Add basic list of available commands
-#	
-#	--debug			debug mode (A more verbose verbose mode)
-#	-v					verbose mode 
-#	-d					dry run mode
+# DONE: Start small; just allow choosing desired instances and installing to ~/dots/
+# DONE: Think about .dotters
 
-# Current features:
-#		installation of chosen instances
-#		on the fly templating for different instance types
-#		hot reloading templated files via parenter
-#		saving and editing configs, with support for github
-#		adding configs to specific instance
-#
-#	Planned features:
-#		per-instance package management
-#		...
+# NOTE: Woohoo another recursive problem
+# 
+# Set all global vars:
+dotconf="/home/$(whoami)/dots/.dotter.conf"
 
-#	Is designed work in the following structure:
-
-# Configuration home
-	#	global
-	#	instance1
-		#	global
-		#	instance1
-			#	global
-		#	instance2
-			#	global
-			#	...
-		#	...
-
-	#	instance2
-		#	global
-		#	instance1
-			#	global
-			#	...
-		#	...
-	# ...
-
-#	All instances must contain a global, but do not need to contain child instances
-#	A global must NOT have an instance, it will not be detected.
-#	In a global there can be normally any file, as they will be managed later in the ~/dots/ direcory
-#	Generally there is a /user/ file, containing anything that a user would have in the main file, such as .bashrc, .vimrc, .config etc. 
-#	There can be other folders or files as well, such as /bin/ for binaries specific to that instance.
-
-################
-# Installation #
-################
-
-# From the directory containing your configurations:
-# Run 'dotter install'
-
-########
-# Help #
-########
-
-# Run:
-# 'dotter help'
-# OR
-# 'dotter'
-
-####################
-# Global Variables #
-####################
-
-verbose_mode=n
-debug_mode=n
-dry_run=n
-self_name="$(basename $0)"
-origin="$(pwd)"
-dotconf=~/dots/".dotter.conf"
+# read all available folders; if there is a folder not named global, move working directory to that folder and run the function itself.
 
 
-####################
-# Option functions #
-####################
-
-RED="\e[31m"
-GREEN="\e[32m"
-ENDCOLOR="\e[0m"
-VERBOSE_TEXT="${GREEN} [vecho]${ENDCOLOR}"
-DEBUG_TEXT="${RED} [debug]${ENDCOLOR}"
-
-# Verbose echo
-vecho () {
-	if [[ "$verbose_mode" == "y" ]] || [[ "$debug_mode" == "y" ]]; then
-		echo -e "$VERBOSE_TEXT $1" >&2
-	fi
-}
-
-# Debug echo
-decho () {
-	if [[ "$debug_mode" == "y" ]]; then
-		echo -e "$DEBUG_TEXT $1"	>&2
-	fi
-}
-
-# set option 'set +x' if debug mode is on
-dset () {
-	if [[ "$debug_mode" == "y" ]]; then
-		PS4='\033[0;33m+(${BASH_SOURCE}:${LINENO}):\033[0m ${FUNCNAME[0]:+${FUNCNAME[0]}(): }'
-		set -x
-	fi
-}
-# set option 'set +x' to unset dset
-dunset () {
-	set +x
-	PS4=''
-}
-
-##################
-# Help functions #
-##################
-
-# Usage: incorrect arg as $1
-base_opt_usage="$self_name [-v#rbose] [-d#yrun] [-D#bug] ..."
-_help_base_opt () {
-	echo -e "Invalid usage of '$1'\nUsage:\n	$base_opt_usage"
-}
-
-_help_base_arg () {
-	echo -e "Invalid argument: '$1'\nUsage:\n	"
-}
-
-# TODO: Write help.....
-_help () {
-	echo "help me"
-}
-
-###########
-# Options #
-###########
-
-# Get standard options
-while getopts "vdD" opt; do
-	case $opt in
-		v) verbose_mode=y ; echo "verbose mode on" ;;
-		d) dry_run=y ; echo "dry run mode on" ;;
-		D) debug_mode=y ; echo "debug mode on" ;;
-		*) _help_base_opt "$opt" ; 
-			exit 1 ;;
-	esac
-	shift $((OPTIND - 1))
-done
-
-
-dunset
-dset
-
-vecho "Leftover options and arguments: $@"
-
-# All comments are written when programming so I can remember the steps I was following, otherwise my ram limited brain will forget what I was doing.
-
-#	##################
-#	# Base Functions #
-#	##################
-
-# Functions that cannot be called from the tty, rather are relied upon by other functions.
-
-
-# vecho : verbose echo
-
-
-# wormer: function to go through all files and directories in the instance home. 
-# Arguments: Directory you want to start worming from; origin directory
 wormer () {
-	local origin_directory=$1
-	local chosen_instances=()
-
-	# Defining function inside here to be able to enclose a recursive function in a single function for conciseness
-	# Goes through each directory in the directory given, checks if directory has more than one folder.
-	# If has more than one folder, then run the worm again with that directory as the argument
+	local origin_dir=$1
+	local directories=()
 	worm () {
-
-		local working_directory="$1"
-
-		# Create local variables for cleanliness
-		local directory=
+		local working_dir=$1
+		local dir=
 		local cont=false
-		local found_directories=($(find "$working_directory" -mindepth 1 -maxdepth 1 -type d))
-
-		vecho "found_directories: $found_directories"
-
-		# Check if there is more than one instance within the instance (Doesn't check if instance contains global or not)
-		# If so end stack and append to chosen_instances
-		if [[ ${#found_directories[@]} == 1 ]]; then
-
-			vecho "End of tail; closing stack and appending directories." >&2
-
-			# Readlink cleans the directory string of extra slashes
-			directories+=("$found_directories")
-
-		# Otherwise create new worms for each directory found
+		read -a found_dirs <<< $(echo $working_dir/*/) 
+		if [[ ${#found_dirs[@]} == 1 ]]; then
+			echo "End of tail; closing stack and appending directories." >&2
+			directories+=("$found_dirs")
 		else
-			for directory in "${found_directories[@]}"; do
-				directory_basename="$(basename $directory)"
-				
-				vecho "Found: $directory" >&2
-				if [[ ! "$directory_basename" == "global" ]]; then
-					echo "Found instance: $directory_basename" >&2
-					read -p "Would you like to add instance $directory_basename? (y/n): " cont #nue
-					if [[ "$cont" == "y" ]]; then
-						vecho "worming $directory" >&2
-						worm "$directory"
+			for dir in ${found_dirs[@]}; do
+				base=$(basename $dir)
+			r_dir=$dir
+				echo "Found: $r_dir" >&2
+				if [[ ! $base == "global" ]]; then
+					echo "Found instance: $base" >&2
+					read -p "Would you like to add instance $base? (y/n): " cont
+					if [[ $cont == "y" ]]; then
+						echo "worming $r_dir" >&2
+						worm $dir
 					else
-						vecho "Skipping $directory_basename..." >&2
+						echo "Skipping $base..." >&2
 						continue
 					fi
 				else 
-					vecho "Automatically adding global..." >&2
-					directories+=("$directory")
+					echo "Automatically adding global..." >&2
+					directories+=("$r_dir")
 				fi
 			done
 		fi
 		return 0
 	}
 
-	# Start the initial worming!!
-	worm "$origin_directory"
+	worm $origin_dir
 
-	# Not sure if this should be in quotes or not.
-	# echo out the array of dictionaries
 	echo ${directories[@]}
 	return 0
+
 }
 
-# A function to link all contents within each instance to its respective dots. links will be forced? or ask to replace a link when it occurs
-# Gets file structure and creates directories to ~/dots when needed
-# Afterwards goes through every file in the directory and links it to its respective area in dots.
-linkdir () {
-	# Usage: link_global directory_of_global
-	local source_directory="$1"
-	local destination=~/dots
-	local relative_path=
-	local destination_file=
-
-	vecho "Source_dir = $source_directory"
-
-	if [[ ! $dry_run == true ]]; then
-		mkdir -p "$destination"
-	fi	
-
-	vecho "made directory $destination"
-
-	find "$source_directory" -type f | while read -r FILE; do
-		relative_path="${FILE#$source_directory/}"	
-		dest_file="$destination/$relative_path"
-
-		if [[ ! "$dry_run" == true ]]; then
-			mkdir -p "$(dirname "$dest_file")"
-		fi
-
-		vecho "made directory $(dirname "$dest_file")"
-
-		if [[ "$(basename "$FILE")" == ".dot" ]]; then
-			dot_add "$dest_file" "$FILE"
-		fi
-
-		if [[ ! "$dry_run" == true ]]; then
-			ln -f "$(realpath "$FILE")" "$dest_file"
-		fi
-		echo "linked $FILE -> $dest_file"
-	done
-	echo "Symlinked created successfully from $source_directory"
-}
-
-# Check and create dotconf with proper json syntax
-create_dot_conf () {
+# Adds contents of .dot to .dotter.conf
+dot_add () {
 	# Check if .dotter.conf exists and contains "{}"
 	if [ -f "$dotconf" ]; then
 		if [ ! -s "$dotconf" ]; then
@@ -280,52 +67,41 @@ create_dot_conf () {
 		echo "'$dotconf' didn't exist" >&2
 		echo "{}" > "$dotconf"
 	fi
-}
-
-# Adds contents of .dot to .dotter.conf
-# Args: full location of .dot
-dot_add () {
-	# Check if .dotter.conf exists and contains "{}"
-	create_dot_conf
 	# Arguments: dot_add full_destination full_file_location
 	local full_destination=$1
 	local full_file_location=$2
 	
 
-	vecho -e "\nfound .dot \n\n"
+	echo -e "\n\n\n\nfound .dot \n\n\n\n"
 	local tempjson=$(mktemp)
 	local loc="$(dirname "$full_destination")"
 	local loc="${loc#~/dots/}"  # Remove the leading ~/dots/
 	# Use jq to update .dotter.conf
 	
-	vecho "Full destination = $full_destination"
-	vecho "Full file location = $full_file_location"
-	vecho "location = $loc"
+	if [ $verbose_mode = "true" ]; then
+		echo "Full destination = $full_destination"
+		echo "Full file location = $full_file_location"
+		echo "location = $loc"
+	fi
+
 
 	jq --argjson dot "$(jq '.' $full_file_location)" --arg loc "$loc" --arg origin "$full_file_location" \
 		'.dots[$loc] = $dot | .dots[$loc].origin = $origin' "$dotconf" > $tempjson && mv $tempjson $dotconf 
+	rm $tempjson
 }
 
-# Kill parenter daemons and child processes
-kill_parents () {
-	if pgrep parenter >/dev/null 2>&1; then
-		vecho "Killing all parenter processes"
-		local parents_gpid=($(ps x -o  "%r %c" | grep parenter -m 1))
-		kill -- -"$parents_gpid"
-	else
-		echo "There are no parents with daemon attached"
+# Add config files to certain instance
+# Args is just the rest of the files
+dotsdir=~/dots/
+confdir=~/.config/
+userdir=~/
+
+dotter_add_configs () {
+
+	if [ $verbose_mode = "true" ]; then
+		echo "dotsdir = "$dotsdir
+		echo "confdir = "$confdir
 	fi
-}
-
-#############
-# Functions #
-#############
-
-# Add specified configuration file to specified instance
-dotter_config_add () {
-
-	vecho "dotsdir = "$dotsdir
-	vecho "confdir = "$confdir
 	# Find the origin location of said file from dots
 	local files=($@)
 	# for each file, ask the user which instance to install it to
@@ -341,13 +117,15 @@ dotter_config_add () {
 	local git_location=~/github/linux/dotfiles
 
 	while read -r instance; do
-		vecho "Instance = $instance"
+		echo "Instance = $instance"
 		instances+=("${instance}")
 		clean_instances+=("${instance#$git_location}")
 	done< <(jq -r '.instances[]' "$dotconf")
 
-	vecho "instances = ${instances[@]}"
-	vecho "clean instances = ${clean_instances[@]}"
+	if [ $verbose_mode = "true" ]; then
+		echo "instances = ${instances[@]}"
+		echo "clean instances = ${clean_instances[@]}"
+	fi
 	
 	
 	# TODO: Make an option that allows sending all the files to the first chosen instance
@@ -366,9 +144,11 @@ dotter_config_add () {
 			echo "Error: Failed to parse $location; file is not in home/user directory"
 			exit 1
 		fi
-		vecho -e "File = $file\nlocation = $(pwd)/$file"
-		vecho -e "Parsed location = $parsed_location"
-		vecho -e "Parsed dir = $parsed_dir"
+		if [ $verbose_mode = "true" ]; then
+			echo -e "File = $file\nlocation = $(pwd)/$file"
+			echo -e "Parsed location = $parsed_location"
+			echo -e "Parsed dir = $parsed_dir"
+		fi
 		
 		# Ask the user which instance do they want to install to
 		local chosen_instance
@@ -393,10 +173,12 @@ dotter_config_add () {
 		# now instance has been chosen, so mkdir and move file
 		final_dir="${instances[$instance_number]}/$parsed_dir"
 		final_loc="$final_dir/$file"
-		vecho -e "Making directory $final_dir"
-		vecho -e "mkdir -p $final_dir"
-		vecho -e "moving $file to $final_loc"
-		vecho -e "hardlinking $final_loc to $location"
+		if [ $verbose_mode = "true" ]; then
+			echo -e "Making directory $final_dir"
+			echo -e "mkdir -p $final_dir"
+			echo -e "moving $file to $final_loc"
+			echo -e "hardlinking $final_loc to $location"
+		fi
 
 		# mv file to proper instance location
 		# And then hardlink it back to its old location
@@ -406,12 +188,14 @@ dotter_config_add () {
 			ln "$final_loc" "$file"
 		else
 			echo "Dry run is on"
+			echo -e "mkdir -p $final_dir\nmv $file $final_loc\nln $final_loc $file"
 		fi
-		vecho -e "\n\n"
+		echo -e "\n\n"
 	done
+
 }
 
-# dots template - create a template file at location/pwd named dots.
+# dots template - add a defualt file for expanding upon when templating with empty json things.
 # Args: (location) Otherwise uses pwd
 dots_template () {
 	local template="
@@ -433,7 +217,7 @@ dots_template () {
 	else
 		location="$1"
 	fi
-	vecho "$location"
+	echo "$location"
 	# if .dot already exists ask if they want to override it
 	local cont
 	if [[ -f $location/.dot ]]; then
@@ -444,6 +228,13 @@ dots_template () {
 		fi
 	fi
 	echo "$template" > $location/.dot
+
+	
+}
+
+kill_parents () {
+	local parents_gpid=($(ps x -o  "%r %c" | grep parenter -m 1))
+	kill -- -"$parents_gpid"
 }
 
 # Do all parent commands from dotter.conf
@@ -463,52 +254,56 @@ dotter_do_parents () {
 	# Kill all instances of parenter, if daemon mode is true to ensure that only a single instance remains
 	kill_parents
 	jq -r '.info | to_entries[] | .key' "$dotconf" | while read -r dot_key; do
-		# Create associative array with all values
-		declare -A variables=()
+	# Create associative array with all values
+	declare -A variables=()
 
-		vecho -e "	$dot_key \n\n\n\n"
-		# Read each info and add to associative array
-		# Use process substitution to avoid subshell issues
-		while read -r info_entry; do
-			variable_name="${info_entry%%:*}"
-			variable_value="${info_entry#*: }"
-			# Add catch; since if variable_name has no value then "${info_entry#*: }" will fail, so check if variable_value = info_entry
-			if [ "$variable_value" = "$info_entry" ]; then
-				variable_value=""
-			fi
-			variables["$variable_name"]="${variable_value}"
-
-			vecho -e "variable_name = $variable_name\nvariable_value = $variable_value"
-
-		done < <(jq -r --arg dot_key "$dot_key" '.info[$dot_key] | to_entries[] | "\(.key): \(.value)"' "$dotconf")
+	echo -e "\n\n\n\n $dot_key \n\n\n\n"
+	# Read each info and add to associative array
+	# Use process substitution to avoid subshell issues
+	while read -r info_entry; do
+		variable_name="${info_entry%%:*}"
+		variable_value="${info_entry#*: }"
+		# Add catch; since if variable_name has no value then "${info_entry#*: }" will fail, so check if variable_value = info_entry
+		if [ "$variable_value" = "$info_entry" ]; then
+			variable_value=""
+		fi
+		variables["$variable_name"]="${variable_value}"
+		if [ "$verbose_mode" = true ]; then
+			echo -e "variable_name = $variable_name\nvariable_value = $variable_value"
+		fi
+		# TODO: learn how tf process substitution works (as told from ai)
+	done < <(jq -r --arg dot_key "$dot_key" '.info[$dot_key] | to_entries[] | "\(.key): \(.value)"' "$dotconf")
 
 		# Using these values, execute all parenter entries
 		parenter_entries=()
 		while read -r parenter_entry; do
 			# parse all variables within each parenter entry and replace with respective value from associative array
-			vecho "Parenter entry = $parenter_entry"
-
+			if [ "$verbose_mode" = true ]; then
+				echo "Parenter entry = $parenter_entry"
+			fi
 			for key in ${!variables[@]}; do
-
-				vecho "Attempting to swap \$$key for ${variables[$key]}"
-
+				if [ "$verbose_mode" = true ]; then
+					echo "Attempting to swap \$$key for ${variables[$key]}"
+				fi
 				parenter_entry=$(sed "s/\$$key/${variables[$key]}/g" <<< $parenter_entry)
-
-				vecho -e "Result:\n$parenter_entry\n\n"
-
+				if [ "$verbose_mode" = true ]; then
+					echo -e "Result:\n$parenter_entry\n\n"
+				fi
 			done
-
-			vecho -e "Parsed parenter entry = $parenter_entry\n\n"
-
+			if [ "$verbose_mode" = true ]; then
+				echo -e "Parsed parenter entry = $parenter_entry\n\n"
+			fi
 			# Parenter entry has been parsed; can now do parenter command BUT must move to correct directory first
 			# Move to correct directory
 			local correct_dir=~/dots/$dot_key
-
-			vecho "correct dir = $correct_dir"
-
+			if [ "$verbose_mode" = true ]; then
+				echo "correct dir = $correct_dir"
+			fi
 			(cd $correct_dir &&
-				vecho "$(pwd)"
-				vecho "parenter $parenter_entry"
+				if [ "$verbose_mode" = true ]; then
+					pwd
+					echo "parenter $parenter_entry"
+				fi
 				if [ $daemon_mode = "true" ]; then
 					# Also put all outputs to a log file under the same name
 					# Log the execution start
@@ -535,9 +330,9 @@ dotter_do_parents () {
 				fi
 			)
 		done < <(jq -r --arg dot_key "$dot_key" '.dots[$dot_key].parenter[]' $dotconf)
-		vecho -e "\n\nFinished loop $dot_key\n\n"
+		echo -e "\n\nFinished loop $dot_key\n\n"
 	done
-	vecho "do parents: Finished"
+	echo "Finished"
 }
 
 # Do all cmd cmds from dotter.conf
@@ -548,7 +343,9 @@ dotter_do_cmds () {
 		jq -r --arg dot_key "$dot_key" '.dots[$dot_key].cmds[]' $dotconf | while read -r cmd; do
 			(cd $correct_dir && $cmd)
 		done
+		
 	done
+	
 }
 
 # dots update - reload dot configuration without reinstalling.
@@ -560,9 +357,9 @@ dots_update () {
 	# Check if args is empty:
 	if [[ -z "$args" ]]; then
 		# Assume all dots need to updated.
-
-		vecho "No options passed. Updating all registered dots."
-
+		if [ $verbose_mode = "true" ]; then
+			echo "No options passed. Updating all registered dots."
+		fi
 		jq -r '.dots | to_entries[] | .key' "$dotconf" | while read -r dot_key; 
 		do
 			local origin="$(jq --arg dot_key "$dot_key" '.dots[$dot_key].origin' "$dotconf")"
@@ -571,14 +368,14 @@ dots_update () {
 			# Also need to get full_destination dot_add
 			local destination=~/dots/$dot_key/.dot
 
-			vecho "dot_key = $dot_key" 
-			vecho "origin = $origin" 
-			vecho "destination = $destination"
-			vecho "using dot_add with the follwing args:"
-			vecho "dot_add \"$destination\" \"$origin\" "
-
+			if [ $verbose_mode = "true" ];then
+				echo "dot_key = $dot_key" 
+				echo "origin = $origin" 
+				echo "destination = $destination"
+				echo "using dot_add with the follwing args:"
+				echo "dot_add \"$destination\" \"$origin\" "
+			fi
 			dot_add "$destination" "$origin"
-
 		done
 	else
 		for arg in "${args[@]}"; do
@@ -586,12 +383,12 @@ dots_update () {
 			# strip origin of quotes
 			origin="${origin//\"/}"
 			local destination=~/dots/$arg/.dot
-
-			vecho "origin = $origin" 
-			vecho "destination = $destination"
-			vecho "using dot_add with the follwing args:"
-			vecho "dot_add \"$destination\" \"$origin\" "
-
+			if [ $verbose_mode = "true" ]; then
+				echo "origin = $origin" 
+				echo "destination = $destination"
+				echo "using dot_add with the follwing args:"
+				echo "dot_add \"$destination\" \"$origin\" "
+			fi
 		dot_add "$destination" "$origin"
 		done
 	fi
@@ -600,16 +397,61 @@ dots_update () {
 	return 0
 }
 
-# Do all requests specified in dotterconf
+# A function to link all contents within each instance to its respective dots. links will be forced? or ask to replace a link when it occurs
+# Gets file structure and creates directories to ~/dots when needed
+# Afterwards goes through every file in the directory and links it to its respective area in dots.
+linkdir () {
+	# Usage: link_global directory_of_global
+	local source_dir=$1
+	local destination=~/dots
+	local relative_path=
+	local dest_file=
+
+	if [ "$verbose_mode" = true ]; then
+		echo "Source_dir = $source_dir"
+	fi
+
+	if [[ ! $dry_run == true ]]; then
+		mkdir -p "$destination"
+	fi	
+	if [[ ! $verbose_mode == true ]]; then
+		echo "made directory $destination"
+	fi
+
+	find "$source_dir" -type f | while read -r FILE; do
+		relative_path="${FILE#$source_dir/}"	
+		dest_file="$destination/$relative_path"
+
+		if [[ ! $dry_run == true ]]; then
+			mkdir -p "$(dirname $dest_file)"
+		fi
+		if [[ $verbose_mode == true ]]; then
+			echo "made directory $(dirname $dest_file)"
+		fi
+		if [[ "$(basename $FILE)" == ".dot" ]]; then
+			dot_add "$dest_file" "$FILE"
+		fi
+
+		if [[ ! $dry_run == true ]]; then
+			ln -f "$(realpath "$FILE")" "$dest_file"
+		fi
+		if [[ $verbose_mode == true ]]; then
+			echo "linked $FILE -> $dest_file"
+		fi
+	done
+echo "Symlinked created successfully from $source_dir"
+}
 dotter_do_requests () {
 	local dots=
 	local tempjson=$(mktemp)
 
-	vecho "$(jq . "$dotconf")"
+	if [ $verbose_mode = "true" ]; then
+		echo "$(jq . "$dotconf")"
+	fi
 
 	jq -r '.dots | to_entries[] | .key' "$dotconf" | while read -r dot_key; do
-		vecho "Processing dot key: $dot_key"
-		vecho "Dot_key from first while read: $dot_key"
+		echo "Processing dot key: $dot_key"
+		echo "Dot_key from first while read: $dot_key"
 		# Loop through each key-value pair in the "request" object for the current dot key
 		jq -r --arg dot_key "$dot_key" '.dots[$dot_key].request | to_entries[] | "\(.key): \(.value)"' "$dotconf" | while read -r request_entry; do
 			variable_name="${request_entry%%:*}"
@@ -622,29 +464,28 @@ dotter_do_requests () {
 			dotter_request $variable_args </dev/tty 
 			variable_value=$(dotter_request $variable_args)
 			variable_value=${variable_value//\"/}
-
-			vecho "dot_key = $dot_key"
-			vecho "variable_name = $variable_name"
-			vecho "variable_args = $variable_args"
-			vecho "dotter_request $variable_args"
-			vecho "Variable_value = $variable_value"
-			vecho -e "\n"
-
+			if [ $verbose_mode = "true" ]; then
+				echo "dot_key = $dot_key"
+				echo "variable_name = $variable_name"
+				echo "variable_args = $variable_args"
+				echo "dotter_request $variable_args"
+				echo "Variable_value = $variable_value"
+				echo -e "\n"
+			fi
 			# check if value already existed
 			if [[ -z $(jq --arg dot_key "$dot_key" --arg name "$variable_name" '.info[$dot_key][$name] //empty' $dotconf) ]]; then
-
-				vecho "passed value existing test"
-
+				if [ $verbose_mode = true ]; then
+					echo "passed value existing test"
+				fi
 				jq --arg name "$variable_name" --arg value "$variable_value" --arg dot_key "$dot_key" '.info[$dot_key] += {$name: $value}' "$dotconf" > "$tempjson" && mv $tempjson $dotconf 
 			fi
 		done
 	done
 }
-
 # Reload entire configuration using stored instances in .dotter.conf
 dotter_reload () {
 
-	# Save all instances in tempjson, and then completely override $dotconf 
+	# Save all instances in separate
 	# Delete everything in .dotter.conf
 	local tempjson="$(mktemp)"
 	jq '{instances: .instances}' "$dotconf" > "$tempjson" && mv "$tempjson" "$dotconf"
@@ -652,7 +493,9 @@ dotter_reload () {
 	# Relink everything stated in instances, similar to how dotter_install does it
 	# Loop through instances:
 	jq -r '.instances[]' $dotconf | while read -r instance; do
-		vecho "$instance"
+		if [ "$verbose_mode" = true ]; then
+			echo "$instance"
+		fi
 		linkdir "$instance" 
 	done
 	dotter_do_requests
@@ -661,9 +504,7 @@ dotter_reload () {
 	
 }
 
-# Dotter install
 dotter_install () {
-	# TODO: Change this installer greeting
 	echo -e "Dots installer - Dotter.
 	assuming installation because no options passed.
 	run 'dotter --help' to see options\n"
@@ -675,7 +516,9 @@ dotter_install () {
 		directories=$(wormer $origin)
 		echo -e "\n"
 
-		vecho -e "Chosen directories: ${directories[@]} \n"
+		if [ $verbose_mode = "true" ]; then
+			echo -e "Chosen directories: ${directories[@]} \n"
+		fi
 
 		echo "instances chosen: "
 		for dir in ${directories[@]}; do
@@ -687,21 +530,28 @@ dotter_install () {
 		mkdir -p ~/dots
 		
 		# Check if .dotter.conf exists and contains "{}"
-		create_dot_conf
-		
+		if [ -f "$dotconf" ]; then
+			if [ ! -s "$dotconf" ]; then
+				echo "'$dotconf' was empty" >&2
+				echo "{}" > "$dotconf"
+			fi
+		else
+			echo "'$dotconf' didn't exist" >&2
+			echo "{}" > "$dotconf"
+		fi
 		local tempjson=$(mktemp)
 		local json="$(printf '%s\n' ${directories[@]} | jq -R . | jq -s .)"
-		vecho "json = ${json[@]}"
-
+		echo "json = ${json[@]}"
 		jq --argjson instances "$json" '.instances = $instances' $dotconf > $tempjson && mv $tempjson $dotconf	
+			
 
 		read -p "Are you sure you want to continue? (y/n): " cont
 		if [ $cont = "y" ]; then
 			for dir in ${directories[@]}; do
 				linkdir $dir
 			done
-			read -p "Would you like setup the .dotter.conf file? (y/n): " setup 
-			if [ $setup = "y" ]; then
+			read -p "Would you like prepare the .dotter.conf file? (y/n): " prepare
+			if [ $prepare = "y" ]; then
 				dotter_do_requests
 				read -p "Would you like to template all files as requested from .dot's? (y/n): " template
 				if [ $template = "y" ]; then
@@ -710,8 +560,8 @@ dotter_install () {
 				fi
 				echo -e "If you would like to turn on the daemon for hot reloading templates, run 'dotter do parents --daemon=true'"
 			else
-				echo "If you would like to setup the .dotter.conf, run 'dotter do requests'"
-				echo "Exiting without setting up the .dotter.conf"
+				echo "If you would like to create the .dotter.conf, run 'dotter do requests'"
+				echo "Exiting without creating .dotter.conf"
 				exit 0
 			fi
 		else
@@ -727,18 +577,13 @@ dotter_install () {
 		echo "Exiting, doing nothing"
 		exit 0
 	fi
+
 }
 
-# Reset config; keep all instances tho.
 dotter_config_reset () {
-	# Save all instances in tempjson, and then completely override $dotconf 
-	# Delete everything in .dotter.conf
-	local tempjson="$(mktemp)"
-	jq '{instances: .instances}' "$dotconf" > "$tempjson" && mv "$tempjson" "$dotconf"
-
+	> $dotconf
 }
 
-# Set all monitor information as well as add info to certain instances if desired
 dotter_set() {
     if [[ $1 == "monitors" ]]; then
         if ! command -v wlr-randr &>/dev/null; then
@@ -765,27 +610,30 @@ dotter_set() {
                 local main_monitor_id=${monitors[$main_monitor_index]}
                 local tempjson=$(mktemp)
 								
-								vecho "ids = ${monitors[*]}"
-								vecho "indexes = ${!monitors[*]}"
+								if [ $verbose_mode = "true" ]; then
+									echo "ids = ${monitors[*]}"
+									echo "indexes = ${!monitors[*]}"
+								fi
 								# Remember that for parenter vars have to be comma separated.
 								# So changing monitors to comma separated
 								IFS=","
 
-								vecho "Setting .monitors.all ids and indexes..."
+								echo "Setting .monitors.all ids and indexes..."
                 jq --arg ids "${monitors[*]}" --arg indexes "${!monitors[*]}" \
                     '.monitors.all.ids = $ids | .monitors.all.indexes = $indexes' "$dotconf" > "$tempjson" && mv "$tempjson" "$dotconf"
                 
-                vecho "Setting .monitors.main's id and index..."
+                echo "Setting .monitors.main's id and index..."
                 jq --arg id "$main_monitor_id" --arg index "$main_monitor_index" \
                     '.monitors.main.id = $id | .monitors.main.index = $index' "$dotconf" > "$tempjson" && mv "$tempjson" "$dotconf"
                 
-                vecho "Setting .monitors.extra's ids and indexes..."
+                echo "Setting .monitors.extra's ids and indexes..."
 
 								monitor_extras=("${monitors[@]}")
 								unset 'monitor_extras[$main_monitor_index]'
-
-								vecho "ids = ${monitor_extras[*]}"
-								vecho "indexes = ${!monitor_extras[*]}"
+								if [ $verbose_mode = "true" ]; then
+									echo "ids = ${monitor_extras[*]}"
+									echo "indexes = ${!monitor_extras[*]}"
+								fi	
                 
 								jq --arg ids "${monitor_extras[*]}" --arg indexes "${!monitor_extras[*]}" \
 									'.monitors.extra.ids = $ids | .monitors.extra.indexes = $indexes' $dotconf > $tempjson && mv $tempjson $dotconf
@@ -835,24 +683,31 @@ dotter_set() {
     fi
 }
 
-# Dotter setup: links config files to $(whoami)/.config via a symbolic link
-# TODO: Add features for bin, boot and maybe more?
+# dotter_setup; links all /dots/dirs to respective location
 dotter_setup () {
 	# Check if /dots/ has correct info.
 	user_name="$(whoami)"
 	home_folder=~
 	local dots_dir="$(dirname $dotconf)"
-	vecho "dots_dir = $dots_dir"
+	if [ "$verbose_mode" = true ]; then
+		echo "dots_dir = $dots_dir"
+	fi
 	shopt -s dotglob
 	for dir in $dots_dir/*; do
-		vecho $dir
+		if [ "$verbose_mode" = true ]; then
+			echo $dir
+		fi
 		# Make sure that dir isn't logs
 		if [ "$(basename $dir)" = "logs" ]; then
-			vecho "skipping logs..."
+			if [ "$verbose_mode" = true ]; then
+				echo "skipping logs..."
+			fi
 			continue
 			# also make sure it isn't .dotconf
 		elif [ "$(basename $dir)" = ".dotter.conf" ]; then
-			vecho "skipping .dotter.conf..."
+			if [ "$verbose_mode" = true ]; then
+				echo "skipping .dotter.conf..."
+			fi
 			continue
 		elif [ "$(basename $dir)" = "user" ]; then
 			# Link all user files
@@ -863,7 +718,9 @@ dotter_setup () {
 					echo "dry notrunning"
 					ln -sr $userdir $home_folder
 				fi
-				vecho "linking $userdir -> $home_folder/$cleandir"
+				if [ "$verbose_mode" = true ]; then
+					echo "linking $userdir -> $home_folder/$cleandir"
+				fi
 			done
 		# Just ignore anything that is not specified. Don't want to clutter the home folder.
 # 		else
@@ -881,10 +738,11 @@ dotter_setup () {
 	done
 	echo -e "For everything that is not the main config, such as bins and other settings, please link it manually"
 	shopt -p dotglob
+
+	
 }
 
 # Command for option: get
-# TODO: Write specification for dotter_get
 dotter_get () {
 	# Expecting rest of arguments, $@
 	# All information should be set in .dotter.conf in /home/user/dots/
@@ -1011,18 +869,25 @@ options:
 		exit 1
 	fi
 	return 0
+	
 }
 
-# A combination of set and get; sets if get fails.
-# Also allows for a custom string prompt
 dotter_request() {
     if [[ $# -lt 2 ]]; then
         echo "Error: Invalid number of arguments."
-				echo "Usage: dotter_request (monitors/info) (name) (variable) [--string='custom prompt']"
+				echo "Usage: dotter_request (-q) (monitors/info) (name) (variable) [--string='custom prompt']"
         echo "       OR"
-				echo "       dotter_request (monitors/info) (variable) [--string='custom prompt']"
+				echo "       dotter_request (-q) (monitors/info) (variable) [--string='custom prompt']"
         exit 1
     fi
+		local quiet_mode
+
+		while getopts "q" opt; do
+			case $opt in
+				q) quiet_mode=true;;
+			esac
+		done
+
 
     local type=$1
     local name=$2
@@ -1060,107 +925,103 @@ dotter_request() {
         fi
 
     else
-			# TODO: Fix error messages
         echo "Error: Invalid type. Available options: monitors, info"
         exit 1
     fi
 }
 
+# parse options
 
-########
-# Test #
-########
+verbose_mode=false
+dry_run=false
 
-# For testing functions
+self_name=$(basename $0)
+origin=$(pwd)
 
-# Args: rest of them; $@
-# Ideally the arg should be a function name
-_test () {
-	decho "Rest of args: $@\n"
-	case $1 in
-		wormer) shift ; wormer $@ ;;
-		dot_add) shift ; dot_add $@ ;;
-		**) echo "'$1' isn't set, or cannot be, or doesn't exist"; exit 1 ;;
+while getopts "vddv" opt; do
+	case $opt in
+		v) verbose_mode=true ; echo "verbose mode";;
+		d) dry_run=true ; echo "dry run mode";;
+		*) echo "Usage: $self_name [-v]" ;
+			exit 1 ;;
 	esac
+done
+shift $((OPTIND - 1))
 
-}
-#############
-# Arguments #
-#############
+# check if option has been set; if not continue
+if [ -n "$1" ]; then
+	if [ $1 = "get" ]; then
+		shift 1
+		# Run command for get option
+		dotter_get "$@"
+	# elif [ $1 = ]... Haven't decided on other options
+	elif [ $1 = "set" ]; then # Check for set option
+		shift 1
+		dotter_set "$@" # function for set option
+	elif [ $1 = "reload" ]; then
+		shift 1
+		dotter_reload $@
+	elif [ $1 = "request" ]; then
+		shift 1
+		dotter_request "$@"
+	elif [ $1 = "add" ]; then
+		if [ $2 = "configs" ]; then
+			shift 2
+			dotter_add_configs $@
+		fi
+	elif [ $1 = "do" ]; then
+		if [ $2 = "requests" ]; then
+			shift 2
+			dotter_do_requests "$@"
+		elif [ $2 = "parents" ]; then
+			shift 2
+			dotter_do_parents $@
+		elif [ $2 = "cmds" ]; then
+			shift 2
+			dotter_do_cmds $@
+		fi
 
-# Section for functions that do arguments
+	elif [ $1 = "config" ]; then
+		if [ $2 = "reset" ]; then
+			dotter_config_reset
+		fi
 
-# Expects all arguments (unstringed)
-main_arguments () {
-	case $1 in
-		get) shift ; dotter_get $@ ;;
-		set) shift ; dotter_set $@ ;;
-		reload) shift ; dotter_reload $@ ;;
-		request) shift ; dotter_request $@ ;;
-		install) shift ; dotter_install $@ ;;
-		test) shift ; _test $@ ;;
-		setup) shift ; dotter_setup $@ ;;
+	elif [ $1 = "dots" ]; then
+		if [ $2 = "update" ]; then
+			shift 2
+			dots_update $@
+		elif [ $2 = "template" ]; then
+			shift 2
+			dots_template $@
+		fi
+	elif [ $1 = "kill" ]; then
+		if [ $2 = "parents" ]; then
+			if pgrep parenter >/dev/null 2>&1; then
+				echo "Killing all parenter processes"
+				kill_parents
+				exit 0
+			else
+				echo "There are no parents with daemon attached"
+				exit 0
+			fi
+		fi
+	elif [ $1 = "setup" ]; then
+		shift 1
+		dotter_setup $@
+	else
 
-		# Arguments that have their own function
-		do) shift ; do_arguments $@ ;;
-		kill) shift ; kill_arguments $@ ;;
-		dots) shift ; dots_arguments $@ ;;
-		config) shift ; config_arguments $@ ;;
-		**) _help ;;
-	esac
-}
+		echo "
+Invalid option: $1
+Options:
+	get - get value of certain objects
+	set - set value of certain objects 
+	update - update specified dynamic dotfiles
+	daemon - like update but supports hot-reloading
+		"
+		exit 1
 
-do_arguments () {
-	case $1 in
-		requests) shift ; dotter_do_requests $@	;;
-		parents) shift ; dotter_do_parents $@ ;;
-		cmds) shift ; dotter_do_cmds $@ ;;
-		**) do_help ; exit 1 ;;
-	esac
-}
-
-# TODO:
-do_help () {
-	continue
-}
-
-kill_arguments () {
-	case $1 in
-		parents) shift ; kill_parents $@ ;;
-		**) kill_help $@ ; exit 1 ;;
-	esac
-}
-
-kill_help () {
-	test	
-}
-
-dots_arguments () {
-	case $1 in 
-		update) shift ; dots_update $@ ;;
-		template) shift ; dots_template $@ ;;
-		**) dots_help $@ ; exit 1 ;;
-	esac
-}
-dots_help () {
-	test
-}
-
-config_arguments () {
-	case $1 in
-		reset) shift ; dotter_config_reset $@ ;;
-		add) shift ; dotter_config_add $@ ;;
-		**) config_help $@ ; exit 1 ;;
-	esac
-}
-
-config_help () {
-	test
-}
-
-########
-# Main #
-########
-
-# Main part
-main_arguments $@
+	fi
+	# No option was specified - running installer
+else
+dotter_install 
+fi
