@@ -54,6 +54,8 @@ wormer () {
 	return 0
 
 }
+
+# Adds contents of .dot to .dotter.conf
 dot_add () {
 	# Check if .dotter.conf exists and contains "{}"
 	if [ -f "$dotconf" ]; then
@@ -86,6 +88,111 @@ dot_add () {
 	jq --argjson dot "$(jq '.' $full_file_location)" --arg loc "$loc" --arg origin "$full_file_location" \
 		'.dots[$loc] = $dot | .dots[$loc].origin = $origin' "$dotconf" > $tempjson && mv $tempjson $dotconf 
 	rm $tempjson
+}
+
+# Add config files to certain instance
+# Args is just the rest of the files
+dotsdir=~/dots/
+confdir=~/.config/
+userdir=~/
+
+dotter_add_configs () {
+
+	if [ $verbose_mode = "true" ]; then
+		echo "dotsdir = "$dotsdir
+		echo "confdir = "$confdir
+	fi
+	# Find the origin location of said file from dots
+	local files=($@)
+	# for each file, ask the user which instance to install it to
+	# Do this by parsing the chosen instances into nice big array
+	local instances=()
+
+	# add another instance file for printing which has cleaner folders
+	local clean_instances=()
+	
+	# Parse $dotconf for instances using process substitution otherwise instances doesn't get updated....
+	# TODO: Add another clause to dotter conf which names where the sources is (In terms the .git location)
+	# Temporary solution is just to hard code it
+	local git_location=~/github/linux/dotfiles
+
+	while read -r instance; do
+		echo "Instance = $instance"
+		instances+=("${instance}")
+		clean_instances+=("${instance#$git_location}")
+	done< <(jq -r '.instances[]' "$dotconf")
+
+	if [ $verbose_mode = "true" ]; then
+		echo "instances = ${instances[@]}"
+		echo "clean instances = ${clean_instances[@]}"
+	fi
+	
+	
+	# TODO: Make an option that allows sending all the files to the first chosen instance
+	
+	# Ask for each file specifically; maybe the user wants to send each file to separate locations
+	for file in "${files[@]}"; do
+		location="$(pwd)/$file"
+		# Do a global parse of home to get actual location
+		# What if its a bin file that wants to be moved?
+		# Typically bin files are not moved from the dots folder. 
+		# Leave that to another command 'dotter add bins'
+		parsed_location="user/${location#$userdir}"
+		parsed_dir="$(dirname $parsed_location)"
+		# Check if parsed location actually parsed. If not exit with error
+		if [ $parsed_location = $location ]; then
+			echo "Error: Failed to parse $location; file is not in home/user directory"
+			exit 1
+		fi
+		if [ $verbose_mode = "true" ]; then
+			echo -e "File = $file\nlocation = $(pwd)/$file"
+			echo -e "Parsed location = $parsed_location"
+			echo -e "Parsed dir = $parsed_dir"
+		fi
+		
+		# Ask the user which instance do they want to install to
+		local chosen_instance
+		echo -e "\n\n current file: $file"
+
+		while true; do
+			echo "Please select instance to save to."
+			echo "available instances: "
+			for i in "${!clean_instances[@]}"; do
+				echo "	$i) ${clean_instances[$i]}"
+			done
+			read -p "Please enter instance number (0-$((${#instances[@]} - 1))): " instance_number
+			
+			# checking if instance chosen is valid
+			if [[ "$instance_number" =~ ^[0-9]+$ ]] && (( instance_number >= 0 && instance_number < ${#instances[@]} )); then
+				echo "$instance_number is a valid instance number"
+				break
+			else
+				echo "$instance_number is NOT a valid instance number"
+			fi
+		done
+		# now instance has been chosen, so mkdir and move file
+		final_dir="${instances[$instance_number]}/$parsed_dir"
+		final_loc="$final_dir/$file"
+		if [ $verbose_mode = "true" ]; then
+			echo -e "Making directory $final_dir"
+			echo -e "mkdir -p $final_dir"
+			echo -e "moving $file to $final_loc"
+			echo -e "hardlinking $final_loc to $location"
+		fi
+
+		# mv file to proper instance location
+		# And then hardlink it back to its old location
+		if [ $dry_run = "false" ]; then
+			mkdir -p "$final_dir"
+			mv "$file" "$final_loc"
+			ln "$final_loc" "$file"
+		else
+			echo "Dry run is on"
+			echo -e "mkdir -p $final_dir\nmv $file $final_loc\nln $final_loc $file"
+		fi
+		echo -e "\n\n"
+	done
+
 }
 
 # dots template - add a defualt file for expanding upon when templating with empty json things.
@@ -857,6 +964,11 @@ if [ -n "$1" ]; then
 	elif [ $1 = "request" ]; then
 		shift 1
 		dotter_request "$@"
+	elif [ $1 = "add" ]; then
+		if [ $2 = "configs" ]; then
+			shift 2
+			dotter_add_configs $@
+		fi
 	elif [ $1 = "do" ]; then
 		if [ $2 = "requests" ]; then
 			shift 2
