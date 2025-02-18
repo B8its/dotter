@@ -88,14 +88,14 @@ DEBUG_TEXT="${RED} [debug]${ENDCOLOR}"
 # Verbose echo
 vecho () {
 	if [[ "$verbose_mode" == "y" ]] || [[ "$debug_mode" == "y" ]]; then
-		echo -e "$VERBOSE_TEXT $1" >&2
+		echo -e "$VERBOSE_TEXT $@" >&2
 	fi
 }
 
 # Debug echo
 decho () {
 	if [[ "$debug_mode" == "y" ]]; then
-		echo -e "$DEBUG_TEXT $1"	>&2
+		echo -e "$DEBUG_TEXT $@"	>&2
 	fi
 }
 
@@ -321,8 +321,98 @@ kill_parents () {
 # Functions #
 #############
 
+# Add binary to specified instance
+# TODO: Change the selection process to be another function
+# TODO: Allow for adding binaries which are not currently in the binary folder
+# TODO: Allow adding binaries from /bin or /usr/bin folder. (Or force users not to.)
+#
+# Args is just the rest of the files
+dotsdir=~/dots/
+confdir=~/.config/
+userdir=~/
+
+dotter_add_bin () {
+
+	vecho "dotsdir = "$dotsdir
+	vecho "confdir = "$confdir
+	# Find the origin location of said file from dots
+	local files=($@)
+	# for each file, ask the user which instance to install it to
+	# Do this by parsing the chosen instances into nice big array
+	local instances=()
+
+	# add another instance file for printing which has cleaner folders
+	local clean_instances=()
+	
+	# Parse $dotconf for instances using process substitution otherwise instances doesn't get updated....
+	# TODO: Add another clause to dotter conf which names where the sources is (In terms the .git location)
+	# Temporary solution is just to hard code it
+	local git_location=~/github/linux/dotfiles
+
+	while read -r instance; do
+		vecho "Instance = $instance"
+		instances+=("${instance}")
+		clean_instances+=("${instance#$git_location}")
+	done< <(jq -r '.instances[]' "$dotconf")
+
+	vecho "instances = ${instances[@]}"
+	vecho "clean instances = ${clean_instances[@]}"
+	
+	
+	# TODO: Make an option that allows sending all the files to the first chosen instance
+	
+	# Ask for each file specifically; maybe the user wants to send each file to separate locations
+	for file in "${files[@]}"; do
+		location="$(pwd)/$file"
+		vecho "current location: $location"
+
+		# Don't need to parse because bin is always in bin.
+
+		vecho "File = $file\nlocation = $(pwd)/$file"
+		#
+		# Ask the user which instance do they want to install to
+		#
+		local chosen_instance
+		echo -e "\n\n	Current file: $file"
+
+		while true; do
+			echo "Please select instance to save '$file' to."
+		 	echo "available instances: "
+		 	for i in "${!clean_instances[@]}"; do
+		 		echo "	$i) ${clean_instances[$i]}"
+		 	done
+		 	read -p "Please enter instance number (0-$((${#instances[@]} - 1))): " instance_number
+		 	
+		 	# checking if instance chosen is valid
+		 	if [[ "$instance_number" =~ ^[0-9]+$ ]] && (( instance_number >= 0 && instance_number < ${#instances[@]} )); then
+		 		vecho "$instance_number is a valid instance number"
+		 		break
+		 	else
+		 		echo "$instance_number is NOT a valid instance number"
+		 	fi
+		 done
+		# Now make the bin directory for that instance
+		chosen_location="${instances[$instance_number]}/bin"
+		vecho "Conducting: mkdir -p $chosen_location"
+		vecho "Conducting: mv $file $chosen_location"
+		vecho "Conducting: ln $chosen_location/$file $file"
+
+		if [ ! $dry_run = "y" ]; then
+			mkdir -p "$chosen_location"
+			mv "$file" "$chosen_location"
+			ln "$chosen_location/$file" "$file"
+		else
+			echo "Dry run was on, so nothing was changed."
+		fi
+
+	done
+
+	echo "Complete!"
+	
+}
+
 # Add specified configuration file to specified instance
-dotter_config_add () {
+dotter_add_config () {
 
 	vecho "dotsdir = "$dotsdir
 	vecho "confdir = "$confdir
@@ -1105,6 +1195,7 @@ main_arguments () {
 		do) shift ; do_arguments $@ ;;
 		kill) shift ; kill_arguments $@ ;;
 		dots) shift ; dots_arguments $@ ;;
+		add) shift ; add_arguments $@ ;;
 		config) shift ; config_arguments $@ ;;
 		**) _help ;;
 	esac
@@ -1149,13 +1240,24 @@ dots_help () {
 config_arguments () {
 	case $1 in
 		reset) shift ; dotter_config_reset $@ ;;
-		add) shift ; dotter_config_add $@ ;;
 		**) config_help $@ ; exit 1 ;;
+	esac
+}
+
+add_arguments () {
+	case $1 in
+		config) shift ; dotter_add_config $@ ;;
+		bin) shift ; dotter_add_bin $@ ;;
+		**) add_help $@ ; exit 1 ;;
 	esac
 }
 
 config_help () {
 	test
+}
+
+add_help () {
+	echo "Help is not added yet"
 }
 
 ########
